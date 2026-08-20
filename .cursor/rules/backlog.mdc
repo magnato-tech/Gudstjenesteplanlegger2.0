@@ -1,0 +1,16 @@
+---
+description: Prosjekt-backlog for funksjoner som er utsatt med vilje
+alwaysApply: true
+---
+
+# Backlog
+
+## Program Mal (utsatt)
+
+Ikke bygg Admin-fanen «Program Mal» ennå.
+
+- Ingen tabell for liturgi/kjøreplan i arket i dag.
+- Malen skal senere vise deltakere når de er inne i programmet. Det henger sammen med visning mot Tildelinger, ikke med bemanning alene.
+- Per-gudstjeneste-tilpasning er bevisst ute.
+
+Når det tas: én standardmal, ny fane **Malaktiviteter** (MalAktivitetID, Rekkefolge, Tittel, VarighetMin, RolleID, Merknad). Flyttbare brikker. Kun Roller på linjene, ikke faste personer. Ikke flere maltyper, serieplanlegging eller kopi per gudstjeneste i første versjon.

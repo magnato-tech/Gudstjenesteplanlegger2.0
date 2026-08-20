@@ -110,6 +110,54 @@ function normalizeState(parsed: Partial<DatabaseState> | null | undefined): Data
   };
 }
 
+function gruppenavnNokkel(navn: string): string {
+  return String(navn || "").trim().toLowerCase();
+}
+
+function finnRiggGruppe(grupper: Gruppe[]): Gruppe | undefined {
+  const aktive = grupper.filter((g) => g.Aktiv !== false);
+  const n = (g: Gruppe) => gruppenavnNokkel(g.Gruppenavn);
+  return (
+    aktive.find((g) => n(g) === "rigg") ||
+    aktive.find((g) => n(g) === "rigging") ||
+    aktive.find((g) => n(g).startsWith("rigg")) ||
+    aktive.find(
+      (g) =>
+        n(g).includes("rigg") &&
+        !n(g).includes("møtevert") &&
+        !n(g).includes("motevert")
+    ) ||
+    aktive.find((g) => n(g).includes("teknikk")) ||
+    aktive.find((g) => n(g).includes("rigg"))
+  );
+}
+
+const LYD_BILDE_ROLLER = new Set(["lyd", "bilde", "lys"]);
+
+/** Lyd og Bilde hører til Rigg, ikke Lovsang. */
+function korrigerLydBildeTilRigg(state: DatabaseState): {
+  state: DatabaseState;
+  endret: boolean;
+} {
+  const riggingRolle = state.roller.find((r) => {
+    const n = gruppenavnNokkel(r.Rollenavn);
+    return n === "rigg" || n === "rigging";
+  });
+  const rigg =
+    state.grupper.find((g) => g.GruppeID === riggingRolle?.GruppeID) ||
+    finnRiggGruppe(state.grupper);
+  if (!rigg) return { state, endret: false };
+  let endret = false;
+  const now = new Date().toISOString().split("T")[0];
+  const roller = state.roller.map((r) => {
+    const navn = gruppenavnNokkel(r.Rollenavn);
+    if (!LYD_BILDE_ROLLER.has(navn) || r.GruppeID === rigg.GruppeID) return r;
+    endret = true;
+    return { ...r, GruppeID: rigg.GruppeID, SistEndret: now };
+  });
+  return { state: endret ? { ...state, roller } : state, endret };
+}
+
 function loadLocalDatabase(): DatabaseState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -121,7 +169,7 @@ function loadLocalDatabase(): DatabaseState {
         Array.isArray(parsed.roller) &&
         Array.isArray(parsed.gudstjenester)
       ) {
-        return normalizeState({
+        return applyLoadedState(normalizeState({
           gruppetyper: Array.isArray(parsed.gruppetyper) ? parsed.gruppetyper : initialGruppetyper,
           personer: parsed.personer,
           grupper: parsed.grupper,
@@ -138,14 +186,14 @@ function loadLocalDatabase(): DatabaseState {
           rollebeskrivelseImport: Array.isArray(parsed.rollebeskrivelseImport)
             ? parsed.rollebeskrivelseImport
             : initialRollebeskrivelseImport,
-        });
+        }));
       }
     }
   } catch (e) {
     console.warn("Kunne ikke laste lagret database, bruker initielle data:", e);
   }
 
-  return {
+  return applyLoadedState({
     gruppetyper: initialGruppetyper,
     personer: initialPersoner,
     grupper: initialGrupper,
@@ -160,7 +208,7 @@ function loadLocalDatabase(): DatabaseState {
     personerImport: initialPersonerImport,
     gudstjenesterImport: initialGudstjenesterImport,
     rollebeskrivelseImport: initialRollebeskrivelseImport,
-  };
+  });
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<string> {
@@ -181,6 +229,12 @@ async function fetchJson(url: string, init?: RequestInit): Promise<string> {
   );
 }
 
+function applyLoadedState(state: DatabaseState): DatabaseState {
+  const { state: fixed, endret } = korrigerLydBildeTilRigg(state);
+  if (endret) saveDatabase(fixed);
+  return fixed;
+}
+
 export async function loadDatabase(): Promise<DatabaseState> {
   const base = getApiBase();
   if (!base) {
@@ -199,7 +253,7 @@ export async function loadDatabase(): Promise<DatabaseState> {
   if (!payload?.ok) {
     throw new Error(payload?.error || "Kunne ikke laste data fra Google Sheets");
   }
-  return normalizeState(payload.data);
+  return applyLoadedState(normalizeState(payload.data));
 }
 
 export function saveDatabase(state: DatabaseState): void {
@@ -610,6 +664,103 @@ export function svarPaaTildeling(
     svar: updatedSvarListe,
   };
 
+  saveDatabase(updatedDb);
+  return updatedDb;
+}
+
+export type DeltakelseStatus = "Deltar" | "Avventer" | "Deltar ikke" | "Avvist";
+
+/** Rolle å bruke når leder setter status: personens personrolle i gruppen, ellers gruppens eneste/første rolle. */
+export function velgRolleForGruppemedlem(
+  db: DatabaseState,
+  personId: string,
+  gruppeRoller: Rolle[]
+): Rolle | undefined {
+  if (gruppeRoller.length === 0) return undefined;
+  if (gruppeRoller.length === 1) return gruppeRoller[0];
+  const personRolleIds = new Set(
+    db.personroller
+      .filter((pr) => pr.PersonID === personId && pr.Aktiv)
+      .map((pr) => pr.RolleID)
+  );
+  return gruppeRoller.find((r) => personRolleIds.has(r.RolleID)) || gruppeRoller[0];
+}
+
+/** Gruppeleder eller medlem: sett deltakelse for én person på én gudstjeneste+rolle. */
+export function settDeltakelseForPerson(
+  db: DatabaseState,
+  personId: string,
+  gudstjenesteId: string,
+  rolleId: string,
+  status: DeltakelseStatus,
+  kommentar?: string
+): DatabaseState {
+  const now = new Date().toISOString().split("T")[0];
+  const eksisterende = db.tildelinger.filter(
+    (t) =>
+      t.GudstjenesteID === gudstjenesteId &&
+      t.PersonID === personId &&
+      t.RolleID === rolleId
+  );
+
+  if (status === "Deltar ikke") {
+    const fjernIds = new Set(eksisterende.map((t) => t.TildelingID));
+    const updatedDb: DatabaseState = {
+      ...db,
+      tildelinger: db.tildelinger.filter((t) => !fjernIds.has(t.TildelingID)),
+      svar: db.svar.filter((s) => !fjernIds.has(s.TildelingID)),
+    };
+    saveDatabase(updatedDb);
+    return updatedDb;
+  }
+
+  let tildelinger = db.tildelinger;
+  let tildelingId = eksisterende[0]?.TildelingID;
+  if (!tildelingId) {
+    tildelingId = nesteNummerertId(tildelinger, "TildelingID", "T");
+    tildelinger = [
+      ...tildelinger,
+      {
+        TildelingID: tildelingId,
+        GudstjenesteID: gudstjenesteId,
+        RolleID: rolleId,
+        PersonID: personId,
+        OpprettetDato: now,
+        SistEndret: now,
+      },
+    ];
+  }
+
+  const svarStatus: SvarStatus =
+    status === "Deltar" ? "Bekreftet" : status === "Avvist" ? "Avvist" : "Venter";
+
+  const utenSave: DatabaseState = { ...db, tildelinger };
+  const eksisterendeSvarIndex = utenSave.svar.findIndex(
+    (s) => s.TildelingID === tildelingId && s.PersonID === personId
+  );
+  let svar = [...utenSave.svar];
+  if (eksisterendeSvarIndex >= 0) {
+    svar[eksisterendeSvarIndex] = {
+      ...svar[eksisterendeSvarIndex],
+      Svar: svarStatus,
+      Kommentar: kommentar !== undefined ? kommentar : svar[eksisterendeSvarIndex].Kommentar,
+      SvartDato: now,
+    };
+  } else {
+    svar = [
+      ...svar,
+      {
+        SvarID: nesteNummerertId(svar, "SvarID", "S"),
+        TildelingID: tildelingId,
+        PersonID: personId,
+        Svar: svarStatus,
+        Kommentar: kommentar || "",
+        SvartDato: now,
+      },
+    ];
+  }
+
+  const updatedDb: DatabaseState = { ...utenSave, svar };
   saveDatabase(updatedDb);
   return updatedDb;
 }

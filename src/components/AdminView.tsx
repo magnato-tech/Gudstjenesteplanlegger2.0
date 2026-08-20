@@ -320,6 +320,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
     onUpdateDb(updatedDb);
   };
 
+  const handleSettRolleGruppe = (rolleId: string, gruppeId: string) => {
+    const now = new Date().toISOString().split("T")[0];
+    const updatedDb: DatabaseState = {
+      ...db,
+      roller: db.roller.map((r) =>
+        r.RolleID === rolleId
+          ? { ...r, GruppeID: gruppeId || undefined, SistEndret: now }
+          : r
+      ),
+    };
+    saveDatabase(updatedDb);
+    onUpdateDb(updatedDb);
+  };
+
   // Filtrering for personer
   const filteredPersoner = db.personer.filter((p) => {
     const matchesSearch =
@@ -1021,10 +1035,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
             <Layers className="w-5 h-5 text-[#2d5a3f]" />
             <span>Roller & Standardbehov ({db.roller.length})</span>
           </h3>
+          <p className="text-xs text-slate-500">
+            Tjenestegruppe på hver rolle styrer hva gruppelederen ser. Endringen lagres i arket (fanen Roller, kolonnen GruppeID).
+          </p>
 
           <div className="space-y-3">
             {db.roller.map((rolle) => {
-              const gruppe = db.grupper.find((g) => g.GruppeID === rolle.GruppeID);
               const antallKvalifiserte = db.personroller.filter(
                 (pr) => pr.RolleID === rolle.RolleID && pr.Aktiv
               ).length;
@@ -1044,12 +1060,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   </div>
                   <p className="text-xs text-slate-500">{rolle.Beskrivelse}</p>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
-                    <div>
-                      Tjenestegruppe:{" "}
-                      <span className="font-medium text-slate-900">
-                        {gruppe?.Gruppenavn || "Ingen"}
-                      </span>
+                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="font-medium text-slate-600">Tjenestegruppe</label>
+                      <select
+                        value={rolle.GruppeID || ""}
+                        onChange={(e) => handleSettRolleGruppe(rolle.RolleID, e.target.value)}
+                        className="border border-slate-200 rounded-xl p-1.5 bg-slate-50 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+                      >
+                        <option value="">Ingen</option>
+                        {db.grupper
+                          .filter((g) => g.Aktiv)
+                          .slice()
+                          .sort((a, b) => a.Gruppenavn.localeCompare(b.Gruppenavn, "nb"))
+                          .map((g) => (
+                            <option key={g.GruppeID} value={g.GruppeID}>
+                              {g.Gruppenavn}
+                            </option>
+                          ))}
+                      </select>
                       {antallKvalifiserte > 0 && (
                         <span className="text-slate-400"> · {antallKvalifiserte} med personrolle</span>
                       )}

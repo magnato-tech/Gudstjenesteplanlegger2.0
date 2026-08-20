@@ -424,7 +424,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                             {isVenter && (
                               <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold px-3 py-1 rounded-xl">
                                 <Clock3 className="w-3.5 h-3.5 text-amber-600" />
-                                <span>Forslag – venter på svar</span>
+                                <span>Du er forespurt – bekreft eller meld forfall</span>
                               </span>
                             )}
 
@@ -681,9 +681,16 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
       {selectedRolleForModal && (
         <RoleDescriptionModal
           rolle={selectedRolleForModal}
-          beskrivelse={db.rollebeskrivelser.find(
-            (rb) => rb.RolleID === selectedRolleForModal.RolleID
-          )}
+          rollebeskrivelse={
+            db.rollebeskrivelser.find(
+              (rb) => rb.RolleID === selectedRolleForModal.RolleID
+            ) || null
+          }
+          gruppe={
+            selectedRolleForModal.GruppeID
+              ? db.grupper.find((g) => g.GruppeID === selectedRolleForModal.GruppeID) || null
+              : null
+          }
           onClose={() => setSelectedRolleForModal(null)}
         />
       )}
