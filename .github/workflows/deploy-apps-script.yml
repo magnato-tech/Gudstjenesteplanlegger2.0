@@ -22,13 +22,12 @@ jobs:
       - name: Install clasp
         run: npm install -g @google/clasp
 
-      - name: Check secrets
+      - name: Check credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
-          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
         run: |
-          if [ -z "$CLASPRC_JSON" ] || [ -z "$APPS_SCRIPT_ID" ]; then
-            echo "Hoppet over: sett GitHub-secrets CLASPRC_JSON og APPS_SCRIPT_ID."
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "Hoppet over: sett GitHub-secret CLASPRC_JSON (innholdet i ~/.clasprc.json etter clasp login)."
             echo "skipped=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -40,12 +39,14 @@ jobs:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: echo "$CLASPRC_JSON" > ~/.clasprc.json
 
-      - name: Set script id
+      - name: Override script id if secret is set
         if: env.skipped != 'true'
         env:
           APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
         run: |
-          node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync('.clasp.json','utf8')); j.scriptId=process.env.APPS_SCRIPT_ID; fs.writeFileSync('.clasp.json', JSON.stringify(j,null,2));"
+          if [ -n "$APPS_SCRIPT_ID" ]; then
+            node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync('.clasp.json','utf8')); j.scriptId=process.env.APPS_SCRIPT_ID; fs.writeFileSync('.clasp.json', JSON.stringify(j,null,2));"
+          fi
 
       - name: Push to Apps Script
         if: env.skipped != 'true'
