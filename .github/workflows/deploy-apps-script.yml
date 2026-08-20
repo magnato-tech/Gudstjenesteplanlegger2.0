@@ -1,0 +1,60 @@
+name: Deploy Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps-script/**"
+      - ".clasp.json"
+      - ".github/workflows/deploy-apps-script.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install clasp
+        run: npm install -g @google/clasp
+
+      - name: Check secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$APPS_SCRIPT_ID" ]; then
+            echo "Hoppet over: sett GitHub-secrets CLASPRC_JSON og APPS_SCRIPT_ID."
+            echo "skipped=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_ENV"
+
+      - name: Authenticate clasp
+        if: env.skipped != 'true'
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: echo "$CLASPRC_JSON" > ~/.clasprc.json
+
+      - name: Set script id
+        if: env.skipped != 'true'
+        env:
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+        run: |
+          node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync('.clasp.json','utf8')); j.scriptId=process.env.APPS_SCRIPT_ID; fs.writeFileSync('.clasp.json', JSON.stringify(j,null,2));"
+
+      - name: Push to Apps Script
+        if: env.skipped != 'true'
+        run: clasp push --force
+
+      - name: Publish web app
+        if: env.skipped != 'true'
+        env:
+          DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+        run: |
+          ID="${DEPLOYMENT_ID:-AKfycbznLoq62orP53izSEA0wnA7VdQHiNWpP3upTo2nd1owcL3LDZp13gK8LxrAdsjxWwt7vw}"
+          clasp deploy --deploymentId "$ID" --description "ci-${GITHUB_SHA::7}"
