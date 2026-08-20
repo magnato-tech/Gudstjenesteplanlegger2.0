@@ -5,6 +5,7 @@ import {
   finnMedlemmerIGruppe,
   getEffektivtBehov,
   genererPersonligLenke,
+  opprettPersonIRegister,
   saveDatabase,
 } from "../services/dataService";
 import { Gruppe, Person, Rolle, Tildeling } from "../types/database";
@@ -49,6 +50,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     gudstjenesteDato: string;
   } | null>(null);
   const [personToAssign, setPersonToAssign] = useState<string>("");
+  const [assignNewFornavn, setAssignNewFornavn] = useState("");
 
   const person = db.personer.find((p) => p.PersonID === selectedPersonId);
 
@@ -114,6 +116,26 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     onUpdateDb(updatedDb);
     setAssignModal(null);
     setPersonToAssign("");
+    setAssignNewFornavn("");
+  };
+
+  const handleCreateAndAssign = () => {
+    if (!assignModal) return;
+    const fornavn = assignNewFornavn.trim();
+    if (!fornavn) return;
+    const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, [
+      {
+        gudstjenesteId: assignModal.gudstjenesteId,
+        rolleId: assignModal.rolleId,
+        rolleNavn: assignModal.rolleNavn,
+        dato: assignModal.gudstjenesteDato,
+      },
+    ]);
+    saveDatabase(updatedDb);
+    onUpdateDb(updatedDb);
+    setAssignModal(null);
+    setPersonToAssign("");
+    setAssignNewFornavn("");
   };
 
   // Hvis personen ikke er registrert som leder for noen grupper:
@@ -539,22 +561,48 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
               </select>
             </div>
 
+            <div className="border-t border-slate-100 pt-3 space-y-2">
+              <label className="text-xs font-semibold text-slate-600 block">
+                Eller opprett ny person
+              </label>
+              <input
+                type="text"
+                placeholder="Fornavn, eller fornavn etternavn"
+                value={assignNewFornavn}
+                onChange={(e) => setAssignNewFornavn(e.target.value)}
+                className="w-full text-sm border border-slate-300 rounded-xl p-2.5 bg-slate-50"
+              />
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setAssignModal(null)}
+                onClick={() => {
+                  setAssignModal(null);
+                  setAssignNewFornavn("");
+                }}
                 className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
               >
                 Avbryt
               </button>
-              <button
-                type="button"
-                disabled={!personToAssign}
-                onClick={handleExecuteAssign}
-                className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
-              >
-                Lagre tildeling
-              </button>
+              {assignNewFornavn.trim() ? (
+                <button
+                  type="button"
+                  onClick={handleCreateAndAssign}
+                  className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  Opprett og tildel
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!personToAssign}
+                  onClick={handleExecuteAssign}
+                  className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  Lagre tildeling
+                </button>
+              )}
             </div>
           </div>
         </div>

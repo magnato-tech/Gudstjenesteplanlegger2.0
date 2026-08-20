@@ -165,6 +165,18 @@ export interface GudstjenesterImport {
   Dato: string;
   Tid: string;
   Tema: string;
+  Leder?: string;
+  Taler?: string;
+  Forbønn?: string;
+  Barnekirke?: string;
+  Lovsang?: string;
+  Lyd?: string;
+  Bilde?: string;
+  Møtevert?: string;
+  Rigging?: string;
+  Kjøkken?: string;
+  Baking?: string;
+  Pynting?: string;
   MøtelederGammel?: string;
   TalerGammel?: string;
   LovsangGammel?: string;

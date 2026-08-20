@@ -163,6 +163,24 @@ function loadLocalDatabase(): DatabaseState {
   };
 }
 
+async function fetchJson(url: string, init?: RequestInit): Promise<string> {
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      const text = await response.text();
+      if (text.trim()) return text;
+      lastError = "Tomt svar fra Google Sheets.";
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+    await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+  }
+  throw new Error(
+    lastError || "Kunne ikke nå Google Sheets. Last siden på nytt, eller start npm run dev på nytt."
+  );
+}
+
 export async function loadDatabase(): Promise<DatabaseState> {
   const base = getApiBase();
   if (!base) {
@@ -171,8 +189,13 @@ export async function loadDatabase(): Promise<DatabaseState> {
     return local;
   }
 
-  const response = await fetch(`${base}?action=load`);
-  const payload = await response.json();
+  const text = await fetchJson(`${base}?action=load`);
+  let payload: { ok?: boolean; error?: string; data?: Partial<DatabaseState> };
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("Ugyldig svar fra Google Sheets. Prøv å laste siden på nytt.");
+  }
   if (!payload?.ok) {
     throw new Error(payload?.error || "Kunne ikke laste data fra Google Sheets");
   }
@@ -606,6 +629,79 @@ export function finnGrupperForGruppeleder(
   );
 }
 
+export type AppView = "personal" | "leader" | "admin";
+
+export interface PersonTilgang {
+  isLeader: boolean;
+  isAdmin: boolean;
+  views: AppView[];
+}
+
+function erAdministrator(db: DatabaseState, personID: string): boolean {
+  const person = db.personer.find((p) => p.PersonID === personID);
+  if (!person || !person.Aktiv) return false;
+
+  const adminRolle = (db.roller || []).find(
+    (r) => r.Aktiv && String(r.Rollenavn || "").trim().toLowerCase() === "administrator"
+  );
+  if (adminRolle) {
+    const harRolle = (db.personroller || []).some(
+      (pr) => pr.Aktiv && pr.PersonID === personID && pr.RolleID === adminRolle.RolleID
+    );
+    if (harRolle) return true;
+  }
+
+  if (person.PersonID === "P009") return true;
+  const navn = String(person.Navn || "").trim().toLowerCase();
+  const fornavn = String(person.Fornavn || "").trim().toLowerCase();
+  return fornavn === "magnar" || navn === "magnar" || navn.startsWith("magnar ");
+}
+
+/** Tilgang for aktiv person: vanlige brukere, gruppeledere og administrator (Magnar). */
+export function hentTilgang(db: DatabaseState, personID: string): PersonTilgang {
+  const isAdmin = erAdministrator(db, personID);
+  const isLeader = finnGrupperForGruppeleder(db, personID).length > 0;
+  const views: AppView[] = ["personal"];
+  if (isLeader || isAdmin) views.push("leader");
+  if (isAdmin) views.push("admin");
+  return { isLeader, isAdmin, views };
+}
+
+export function visningErTillatt(tilgang: PersonTilgang, view: AppView): boolean {
+  return tilgang.views.indexOf(view) >= 0;
+}
+
+export interface PersonGruppeTilknytning {
+  gruppe: Gruppe;
+  tilknytning: "Leder" | "Nestleder" | "Medlem";
+}
+
+/** Grupper personen leder, er nestleder for, eller er medlem av. */
+export function finnTjenestegrupperForPerson(
+  db: DatabaseState,
+  personID: string
+): PersonGruppeTilknytning[] {
+  const byId = new Map<string, PersonGruppeTilknytning>();
+
+  for (const gruppe of db.grupper) {
+    if (!gruppe.Aktiv) continue;
+    if (gruppe.GruppelederID === personID) {
+      byId.set(gruppe.GruppeID, { gruppe, tilknytning: "Leder" });
+    } else if (gruppe.NestlederID === personID) {
+      byId.set(gruppe.GruppeID, { gruppe, tilknytning: "Nestleder" });
+    }
+  }
+
+  for (const gm of db.gruppemedlemmer) {
+    if (!gm.Aktiv || gm.PersonID !== personID) continue;
+    if (byId.has(gm.GruppeID)) continue;
+    const gruppe = db.grupper.find((g) => g.GruppeID === gm.GruppeID);
+    if (gruppe) byId.set(gruppe.GruppeID, { gruppe, tilknytning: "Medlem" });
+  }
+
+  return Array.from(byId.values());
+}
+
 /**
  * Finner aktive medlemmer i en gitt gruppe
  */
@@ -648,4 +744,245 @@ export function genererPersonligLenke(personID: string): string {
   const origin = window.location.origin;
   const path = window.location.pathname;
   return `${origin}${path}?personId=${personID}`;
+}
+
+const IMPORT_ROLE_COLUMNS: { col: keyof GudstjenesterImport; rolleId: string }[] = [
+  { col: "Leder", rolleId: "R001" },
+  { col: "Taler", rolleId: "R002" },
+  { col: "Forbønn", rolleId: "R003" },
+  { col: "Barnekirke", rolleId: "R004" },
+  { col: "Lovsang", rolleId: "R005" },
+  { col: "Lyd", rolleId: "R006" },
+  { col: "Bilde", rolleId: "R007" },
+  { col: "Møtevert", rolleId: "R008" },
+  { col: "Rigging", rolleId: "R009" },
+  { col: "Kjøkken", rolleId: "R010" },
+  { col: "Baking", rolleId: "R011" },
+  { col: "Pynting", rolleId: "R012" },
+];
+
+function normalizePersonName(value: string): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function splitImportNames(value: unknown): string[] {
+  return String(value ?? "")
+    .split(/[,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function matchPersonByName(db: DatabaseState, rawName: string): Person | null {
+  const key = normalizePersonName(rawName);
+  if (!key) return null;
+  const byNavn = db.personer.filter((p) => normalizePersonName(p.Navn) === key);
+  if (byNavn.length === 1) return byNavn[0];
+  if (byNavn.length > 1) return null;
+  const byFornavn = db.personer.filter((p) => {
+    const fn = normalizePersonName(p.Fornavn) || normalizePersonName(p.Navn).split(" ")[0];
+    return fn === key;
+  });
+  return byFornavn.length === 1 ? byFornavn[0] : null;
+}
+
+export interface UkjentImportSlot {
+  gudstjenesteId: string;
+  rolleId: string;
+  rolleNavn: string;
+  dato: string;
+}
+
+export interface UkjentImportnavn {
+  navn: string;
+  slots: UkjentImportSlot[];
+}
+
+/** Navn i Gudstjenester_import som ikke matcher Personer — admin kan opprette dem. */
+export function finnUkjenteImportnavn(db: DatabaseState): UkjentImportnavn[] {
+  const grouped = new Map<string, UkjentImportnavn>();
+
+  for (const row of db.gudstjenesterImport || []) {
+    const gudstjenesteId = String(row.GudstjenesteID || "").trim();
+    if (!gudstjenesteId) continue;
+    const gud = db.gudstjenester.find((g) => g.GudstjenesteID === gudstjenesteId);
+
+    for (const mapping of IMPORT_ROLE_COLUMNS) {
+      const names = splitImportNames(row[mapping.col]);
+      const rolle = db.roller.find((r) => r.RolleID === mapping.rolleId);
+      for (const navn of names) {
+        if (matchPersonByName(db, navn)) continue;
+        const key = normalizePersonName(navn);
+        const existing = grouped.get(key) || { navn, slots: [] };
+        const already = existing.slots.some(
+          (s) => s.gudstjenesteId === gudstjenesteId && s.rolleId === mapping.rolleId
+        );
+        if (!already) {
+          existing.slots.push({
+            gudstjenesteId,
+            rolleId: mapping.rolleId,
+            rolleNavn: rolle?.Rollenavn || mapping.col,
+            dato: gud?.Dato || row.Dato || "",
+          });
+        }
+        grouped.set(key, existing);
+      }
+    }
+  }
+
+  return Array.from(grouped.values());
+}
+
+function nesteNummerertId<T>(records: T[], field: keyof T, prefix: string): string {
+  const max = records.reduce((acc, rec) => {
+    const num = parseInt(String(rec[field] ?? "").replace(/\D/g, ""), 10);
+    return !isNaN(num) && num > acc ? num : acc;
+  }, 0);
+  return `${prefix}${String(max + 1).padStart(3, "0")}`;
+}
+
+export function nesteGruppeMedlemId(gruppemedlemmer: Gruppemedlem[]): string {
+  return nesteNummerertId(gruppemedlemmer, "GruppeMedlemID", "GM");
+}
+
+/** Aktiver eksisterende rad, eller opprett ny GM…-rad for personen i gruppen. */
+export function sikreGruppemedlemskap(
+  gruppemedlemmer: Gruppemedlem[],
+  gruppeId: string,
+  personId: string,
+  medlemsrolle?: string
+): Gruppemedlem[] {
+  if (!personId) return gruppemedlemmer;
+  const now = new Date().toISOString().split("T")[0];
+  const existing = gruppemedlemmer.find(
+    (gm) => gm.GruppeID === gruppeId && gm.PersonID === personId
+  );
+  if (existing) {
+    return gruppemedlemmer.map((gm) =>
+      gm.GruppeMedlemID === existing.GruppeMedlemID
+        ? {
+            ...gm,
+            Aktiv: true,
+            Medlemsrolle:
+              medlemsrolle !== undefined ? medlemsrolle : gm.Medlemsrolle,
+            SistEndret: now,
+          }
+        : gm
+    );
+  }
+  const ny: Gruppemedlem = {
+    GruppeMedlemID: nesteGruppeMedlemId(gruppemedlemmer),
+    GruppeID: gruppeId,
+    PersonID: personId,
+    Medlemsrolle: medlemsrolle || "Medlem",
+    Aktiv: true,
+    FraDato: now,
+    TilDato: "",
+    Notat: "",
+    OpprettetDato: now,
+    SistEndret: now,
+  };
+  return [...gruppemedlemmer, ny];
+}
+
+/** Ett felt: fornavn alene, eller fornavn + etternavn når det står i kilden / skrives inn. */
+export function splittVisningsnavn(raw: string): { Navn: string; Fornavn: string; Etternavn: string } {
+  const parts = String(raw || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { Navn: "", Fornavn: "", Etternavn: "" };
+  if (parts.length === 1) {
+    return { Navn: parts[0], Fornavn: parts[0], Etternavn: "" };
+  }
+  const etternavn = parts[parts.length - 1];
+  const fornavn = parts.slice(0, -1).join(" ");
+  return { Navn: `${fornavn} ${etternavn}`.trim(), Fornavn: fornavn, Etternavn: etternavn };
+}
+
+/** Opprett person. Etternavn lagres bare hvis navnet har mer enn ett ord. */
+export function opprettPersonIRegister(
+  db: DatabaseState,
+  input: { Navn: string },
+  slots: UkjentImportSlot[] = []
+): DatabaseState {
+  const now = new Date().toISOString().split("T")[0];
+  const navn = splittVisningsnavn(input.Navn);
+  const person: Person = {
+    PersonID: nesteNummerertId(db.personer, "PersonID", "P"),
+    Navn: navn.Navn,
+    Fornavn: navn.Fornavn,
+    Etternavn: navn.Etternavn,
+    Epost: "",
+    Telefon: "",
+    Notat: "",
+    Aktiv: true,
+    OpprettetDato: now,
+    SistEndret: now,
+  };
+
+  let tildelinger = [...db.tildelinger];
+  let svar = [...db.svar];
+  let personroller = [...db.personroller];
+
+  for (const slot of slots) {
+    const alreadyAssigned = tildelinger.some(
+      (t) =>
+        t.GudstjenesteID === slot.gudstjenesteId &&
+        t.RolleID === slot.rolleId &&
+        t.PersonID === person.PersonID
+    );
+    if (alreadyAssigned) continue;
+
+    const tildelingId = nesteNummerertId(tildelinger, "TildelingID", "T");
+    tildelinger = [
+      ...tildelinger,
+      {
+        TildelingID: tildelingId,
+        GudstjenesteID: slot.gudstjenesteId,
+        RolleID: slot.rolleId,
+        PersonID: person.PersonID,
+        OpprettetDato: now,
+        SistEndret: now,
+      },
+    ];
+    svar = [
+      ...svar,
+      {
+        SvarID: nesteNummerertId(svar, "SvarID", "S"),
+        TildelingID: tildelingId,
+        PersonID: person.PersonID,
+        Svar: "Venter",
+        Kommentar: "",
+        SvartDato: "",
+      },
+    ];
+
+    const hasRolle = personroller.some(
+      (pr) => pr.PersonID === person.PersonID && pr.RolleID === slot.rolleId && pr.Aktiv
+    );
+    if (!hasRolle) {
+      personroller = [
+        ...personroller,
+        {
+          PersonRolleID: nesteNummerertId(personroller, "PersonRolleID", "PR"),
+          PersonID: person.PersonID,
+          RolleID: slot.rolleId,
+          Aktiv: true,
+          FraDato: now,
+          TilDato: "",
+          Notat: "",
+          OpprettetDato: now,
+          SistEndret: now,
+        },
+      ];
+    }
+  }
+
+  return {
+    ...db,
+    personer: [...db.personer, person],
+    tildelinger,
+    svar,
+    personroller,
+  };
 }

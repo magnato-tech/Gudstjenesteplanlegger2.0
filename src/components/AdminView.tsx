@@ -1,22 +1,23 @@
 import React, { useState } from "react";
 import {
   DatabaseState,
+  UkjentImportSlot,
+  finnUkjenteImportnavn,
+  finnTjenestegrupperForPerson,
   getEffektivtBehov,
   genererPersonligLenke,
+  opprettPersonIRegister,
   saveDatabase,
 } from "../services/dataService";
 import {
-  Person,
-  Gruppe,
   Rolle,
   Gudstjeneste,
   Tildeling,
   Tjenestebehov,
-  Personrolle,
-  Rollebeskrivelse,
 } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { ImportMigrationModal } from "./ImportMigrationModal";
+import { GroupAdminModal } from "./GroupAdminModal";
 import {
   Calendar,
   Users,
@@ -32,10 +33,11 @@ import {
   HelpCircle,
   Search,
   Filter,
-  BookOpen,
+  Star,
   Database,
   Sliders,
-  Sparkles,
+  AlertTriangle,
+  ChevronDown,
 } from "lucide-react";
 
 interface AdminViewProps {
@@ -44,14 +46,41 @@ interface AdminViewProps {
   onSelectPerson: (personId: string) => void;
 }
 
+const GRUPPEFILTER = [
+  { id: "tjenestegruppe", label: "Tjenestegrupper", aliases: ["tjenestegruppe", "tjenestegrupper"], seksjon: null as string | null },
+  { id: "husgruppe", label: "Husgruppe", aliases: ["husgruppe"], seksjon: null },
+  { id: "lederskap", label: "Lederskap", aliases: ["lederskap", "ledergruppe"], seksjon: "Ledelse" },
+  { id: "gruppeledergruppe", label: "Gruppeledergruppe", aliases: ["gruppeledergruppe"], seksjon: "Ledelse" },
+  { id: "strategigrupper", label: "Strategigrupper", aliases: ["strategigruppe", "strategigrupper"], seksjon: "Ledelse" },
+];
+
+function gruppetypeIderForFilter(db: DatabaseState, filterId: string): string[] {
+  const filter = GRUPPEFILTER.find((f) => f.id === filterId);
+  if (!filter) return [];
+  return db.gruppetyper
+    .filter((gt) => filter.aliases.includes(String(gt.Navn || "").trim().toLowerCase()))
+    .map((gt) => gt.GruppetypeID);
+}
+
+function antallGrupperForFilter(db: DatabaseState, filterId: string): number {
+  const ids = gruppetypeIderForFilter(db, filterId);
+  if (ids.length === 0) {
+    return filterId === "tjenestegruppe" ? db.grupper.length : 0;
+  }
+  return db.grupper.filter((g) => ids.includes(g.GruppetypeID)).length;
+}
+
 export const AdminView: React.FC<AdminViewProps> = ({
   db,
   onUpdateDb,
   onSelectPerson,
 }) => {
-  const [activeTab, setActiveTab] = useState<"services" | "people" | "groups_roles">(
+  const [activeTab, setActiveTab] = useState<"services" | "people" | "groups" | "roles">(
     "services"
   );
+  const [groupTypeFilter, setGroupTypeFilter] = useState("tjenestegruppe");
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [editingGruppeId, setEditingGruppeId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedGroupFilter, setSelectedGroupFilter] = useState("all");
   const [copiedPersonId, setCopiedPersonId] = useState<string | null>(null);
@@ -71,14 +100,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
   });
 
   const [newPersonModal, setNewPersonModal] = useState(false);
-  const [newPersonData, setNewPersonData] = useState<Partial<Person>>({
-    Navn: "",
-    Fornavn: "",
-    Etternavn: "",
-    Epost: "",
-    Telefon: "",
-    Aktiv: true,
-  });
+  const [newFornavn, setNewFornavn] = useState("");
+  const [newPersonSlots, setNewPersonSlots] = useState<UkjentImportSlot[]>([]);
+  const [newPersonGudstjenesteId, setNewPersonGudstjenesteId] = useState("");
+  const [newPersonRolleId, setNewPersonRolleId] = useState("");
+  const [assignNewFornavn, setAssignNewFornavn] = useState("");
 
   const [editNeedModal, setEditNeedModal] = useState<{
     gudstjenesteId: string;
@@ -94,6 +120,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
     rolleNavn: string;
   } | null>(null);
   const [personToAssign, setPersonToAssign] = useState<string>("");
+
+  const ukjenteImportnavn = finnUkjenteImportnavn(db);
+
+  const openNewPersonModal = (prefill?: { fornavn?: string; slots?: UkjentImportSlot[] }) => {
+    setNewFornavn(prefill?.fornavn || "");
+    setNewPersonSlots(prefill?.slots || []);
+    setNewPersonGudstjenesteId(prefill?.slots?.[0]?.gudstjenesteId || "");
+    setNewPersonRolleId(prefill?.slots?.[0]?.rolleId || "");
+    setNewPersonModal(true);
+  };
 
   const handleCopyLink = (personId: string) => {
     const link = genererPersonligLenke(personId);
@@ -143,49 +179,52 @@ export const AdminView: React.FC<AdminViewProps> = ({
     });
   };
 
-  // 2. Opprett Person
   const handleSaveNewPerson = () => {
-    if (!newPersonData.Navn || !newPersonData.Epost) return;
+    const fornavn = newFornavn.trim();
+    if (!fornavn) return;
 
-    const maxPersonNr = db.personer.reduce((max, p) => {
-      const num = parseInt(p.PersonID.replace(/\D/g, ""), 10);
-      return !isNaN(num) && num > max ? num : max;
-    }, 0);
-    const newID = `P${String(maxPersonNr + 1).padStart(3, "0")}`;
+    let slots = newPersonSlots;
+    if (slots.length === 0 && newPersonGudstjenesteId && newPersonRolleId) {
+      const rolle = db.roller.find((r) => r.RolleID === newPersonRolleId);
+      const gud = db.gudstjenester.find((g) => g.GudstjenesteID === newPersonGudstjenesteId);
+      slots = [
+        {
+          gudstjenesteId: newPersonGudstjenesteId,
+          rolleId: newPersonRolleId,
+          rolleNavn: rolle?.Rollenavn || "",
+          dato: gud?.Dato || "",
+        },
+      ];
+    }
 
-    const names = newPersonData.Navn.trim().split(" ");
-    const fornavn = names[0] || "";
-    const etternavn = names.slice(1).join(" ") || "";
-    const now = new Date().toISOString().split("T")[0];
-
-    const newPerson: Person = {
-      PersonID: newID,
-      Navn: newPersonData.Navn,
-      Fornavn: fornavn,
-      Etternavn: etternavn,
-      Epost: newPersonData.Epost,
-      Telefon: newPersonData.Telefon || "",
-      Aktiv: true,
-      OpprettetDato: now,
-      SistEndret: now,
-    };
-
-    const updatedDb: DatabaseState = {
-      ...db,
-      personer: [...db.personer, newPerson],
-    };
-
+    const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, slots);
     saveDatabase(updatedDb);
     onUpdateDb(updatedDb);
     setNewPersonModal(false);
-    setNewPersonData({
-      Navn: "",
-      Fornavn: "",
-      Etternavn: "",
-      Epost: "",
-      Telefon: "",
-      Aktiv: true,
-    });
+    setNewFornavn("");
+    setNewPersonSlots([]);
+    setNewPersonGudstjenesteId("");
+    setNewPersonRolleId("");
+  };
+
+  const handleCreateAndAssign = () => {
+    if (!assignModal) return;
+    const fornavn = assignNewFornavn.trim();
+    if (!fornavn) return;
+    const gud = db.gudstjenester.find((g) => g.GudstjenesteID === assignModal.gudstjenesteId);
+    const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, [
+      {
+        gudstjenesteId: assignModal.gudstjenesteId,
+        rolleId: assignModal.rolleId,
+        rolleNavn: assignModal.rolleNavn,
+        dato: gud?.Dato || "",
+      },
+    ]);
+    saveDatabase(updatedDb);
+    onUpdateDb(updatedDb);
+    setAssignModal(null);
+    setPersonToAssign("");
+    setAssignNewFornavn("");
   };
 
   // 3. Overstyr Tjenestebehov
@@ -285,19 +324,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const filteredPersoner = db.personer.filter((p) => {
     const matchesSearch =
       p.Navn.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.Epost.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (p.Epost || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.PersonID.toLowerCase().includes(searchTerm.toLowerCase());
 
     if (!matchesSearch) return false;
 
     if (selectedGroupFilter !== "all") {
-      const isMember = db.gruppemedlemmer.some(
-        (gm) =>
-          gm.PersonID === p.PersonID &&
-          gm.GruppeID === selectedGroupFilter &&
-          gm.Aktiv
+      const tilknyttet = finnTjenestegrupperForPerson(db, p.PersonID).some(
+        (t) => t.gruppe.GruppeID === selectedGroupFilter
       );
-      if (!isMember) return false;
+      if (!tilknyttet) return false;
     }
 
     return true;
@@ -332,8 +368,48 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       </div>
 
+      {ukjenteImportnavn.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-950">
+                Ukjente navn i oppgavefordelingen
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Disse står i importen, men ikke i personregisteret. Etternavn tas med hvis det står i tabellen. Opprett og tildel herfra — uten å redigere arket.
+              </p>
+            </div>
+          </div>
+          <ul className="space-y-2">
+            {ukjenteImportnavn.map((item) => (
+              <li
+                key={item.navn}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white/70 rounded-xl px-3 py-2 border border-amber-100"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{item.navn}</div>
+                  <div className="text-xs text-slate-600">
+                    {item.slots
+                      .map((s) => `${s.rolleNavn} · ${s.gudstjenesteId}${s.dato ? ` (${s.dato})` : ""}`)
+                      .join(" · ")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openNewPersonModal({ fornavn: item.navn, slots: item.slots })}
+                  className="px-3 py-1.5 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-lg cursor-pointer self-start"
+                >
+                  Opprett person
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Admin Faner */}
-      <div className="flex border-b border-slate-200 space-x-2">
+      <div className="flex border-b border-slate-200 space-x-2 overflow-x-auto">
         <button
           onClick={() => setActiveTab("services")}
           className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
@@ -359,15 +435,27 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab("groups_roles")}
+          onClick={() => setActiveTab("groups")}
           className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
-            activeTab === "groups_roles"
+            activeTab === "groups"
+              ? "border-[#2d5a3f] text-[#2d5a3f]"
+              : "border-transparent text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Grupper ({db.grupper.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("roles")}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
+            activeTab === "roles"
               ? "border-[#2d5a3f] text-[#2d5a3f]"
               : "border-transparent text-slate-600 hover:text-slate-900"
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>Tjenestegrupper ({db.grupper.length}) & Roller ({db.roller.length})</span>
+          <span>Roller ({db.roller.length})</span>
         </button>
       </div>
 
@@ -625,7 +713,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
 
             <button
-              onClick={() => setNewPersonModal(true)}
+              onClick={() => openNewPersonModal()}
               className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
             >
               <Plus className="w-4 h-4" />
@@ -686,10 +774,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     personensRolleIds.includes(r.RolleID)
                   );
 
-                  const personensGrupper = db.gruppemedlemmer
-                    .filter((gm) => gm.PersonID === person.PersonID && gm.Aktiv)
-                    .map((gm) => db.grupper.find((g) => g.GruppeID === gm.GruppeID))
-                    .filter(Boolean);
+                  const personensGrupper = finnTjenestegrupperForPerson(db, person.PersonID);
 
                   return (
                     <tr key={person.PersonID} className="hover:bg-slate-50/70 transition">
@@ -722,12 +807,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       </td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-1 max-w-xs">
-                          {personensGrupper.map((g) => (
+                          {personensGrupper.map((t) => (
                             <span
-                              key={g?.GruppeID}
+                              key={t.gruppe.GruppeID}
                               className="bg-slate-100 text-slate-700 text-[10px] px-1.5 py-0.5 rounded"
                             >
-                              {g?.Gruppenavn}
+                              {t.gruppe.Gruppenavn}
+                              {t.tilknytning !== "Medlem" ? ` (${t.tilknytning})` : ""}
                             </span>
                           ))}
                         </div>
@@ -764,108 +850,226 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       )}
 
-      {/* FANE 3: TJENESTEGRUPPER & ROLLER */}
-      {activeTab === "groups_roles" && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Tjenestegrupper */}
-          <div className="space-y-4">
+      {/* FANE 3: GRUPPER */}
+      {activeTab === "groups" && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-600" />
-              <span>Tjenestegrupper ({db.grupper.length})</span>
+              <Users className="w-5 h-5 text-[#2d5a3f]" />
+              <span>Grupper</span>
             </h3>
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-slate-400 shrink-0" />
+              <select
+                value={groupTypeFilter}
+                onChange={(e) => setGroupTypeFilter(e.target.value)}
+                className="text-xs border border-slate-200 rounded-xl p-2 bg-white focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] min-w-[220px]"
+              >
+                {GRUPPEFILTER.filter((f) => !f.seksjon).map((f) => {
+                  const n = antallGrupperForFilter(db, f.id);
+                  return (
+                    <option key={f.id} value={f.id} disabled={n === 0}>
+                      {f.label}
+                      {n === 0 ? " (ingen ennå)" : ` (${n})`}
+                    </option>
+                  );
+                })}
+                <optgroup label="Ledelse">
+                  {GRUPPEFILTER.filter((f) => f.seksjon === "Ledelse").map((f) => {
+                    const n = antallGrupperForFilter(db, f.id);
+                    return (
+                      <option key={f.id} value={f.id} disabled={n === 0}>
+                        {f.label}
+                        {n === 0 ? " (ingen ennå)" : ` (${n})`}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              </select>
+            </div>
+          </div>
 
-            <div className="space-y-3">
-              {db.grupper.map((gruppe) => {
-                const leder = db.personer.find((p) => p.PersonID === gruppe.GruppelederID);
-                const medlemmer = db.gruppemedlemmer.filter(
-                  (gm) => gm.GruppeID === gruppe.GruppeID && gm.Aktiv
+          <div className="space-y-3 max-w-3xl">
+            {db.grupper
+              .filter((gruppe) => {
+                const ids = gruppetypeIderForFilter(db, groupTypeFilter);
+                if (ids.length === 0 && groupTypeFilter === "tjenestegruppe") return true;
+                return ids.includes(gruppe.GruppetypeID);
+              })
+              .map((gruppe) => {
+                const medlemIds = new Set(
+                  db.gruppemedlemmer
+                    .filter((gm) => gm.GruppeID === gruppe.GruppeID && gm.Aktiv)
+                    .map((gm) => gm.PersonID)
                 );
+                if (gruppe.GruppelederID) medlemIds.add(gruppe.GruppelederID);
+                if (gruppe.NestlederID) medlemIds.add(gruppe.NestlederID);
+                const medlemsnavn = Array.from(medlemIds)
+                  .map((id) => db.personer.find((p) => p.PersonID === id))
+                  .filter((p): p is NonNullable<typeof p> => Boolean(p))
+                  .sort((a, b) => a.Navn.localeCompare(b.Navn, "nb"));
+                const leder = db.personer.find((p) => p.PersonID === gruppe.GruppelederID);
+                const nestleder = db.personer.find((p) => p.PersonID === gruppe.NestlederID);
+                const typeNavn = db.gruppetyper.find(
+                  (gt) => gt.GruppetypeID === gruppe.GruppetypeID
+                )?.Navn;
+                const apen = expandedGroupId === gruppe.GruppeID;
 
                 return (
                   <div
                     key={gruppe.GruppeID}
-                    className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-2"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      setExpandedGroupId(apen ? null : gruppe.GruppeID)
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedGroupId(apen ? null : gruppe.GruppeID);
+                      }
+                    }}
+                    className="w-full text-left bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3 hover:border-[#2d5a3f]/40 cursor-pointer"
                   >
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-slate-900 text-sm">
-                        {gruppe.Gruppenavn}
-                      </h4>
-                      <span className="text-xs font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                        {gruppe.GruppeID}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500">{gruppe.Beskrivelse}</p>
-
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
+                    <div className="flex items-start justify-between gap-2">
                       <div>
-                        Leder:{" "}
-                        <span className="font-medium text-slate-900">
-                          {leder?.Navn || "Ikke oppgitt"}
-                        </span>
+                        <h4 className="font-bold text-slate-900 text-sm">
+                          {gruppe.Gruppenavn}
+                        </h4>
+                        {typeNavn && (
+                          <div className="text-[11px] text-slate-400">{typeNavn}</div>
+                        )}
                       </div>
-                      <div className="text-slate-400">
-                        {medlemmer.length} aktive medlemmer
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Roller */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Layers className="w-5 h-5 text-[#2d5a3f]" />
-              <span>Roller & Standardbehov ({db.roller.length})</span>
-            </h3>
-
-            <div className="space-y-3">
-              {db.roller.map((rolle) => {
-                const gruppe = db.grupper.find((g) => g.GruppeID === rolle.GruppeID);
-                const antallKvalifiserte = db.personroller.filter(
-                  (pr) => pr.RolleID === rolle.RolleID && pr.Aktiv
-                ).length;
-
-                return (
-                  <div
-                    key={rolle.RolleID}
-                    className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-slate-900 text-sm">
-                        {rolle.Rollenavn}
-                      </h4>
-                      <span className="text-xs font-mono bg-[#eef5f1] text-[#2d5a3f] px-2 py-0.5 rounded font-bold border border-[#d2e8d9]">
-                        {rolle.RolleID}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500">{rolle.Beskrivelse}</p>
-
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
-                      <div>
-                        Tjenestegruppe:{" "}
-                        <span className="font-medium text-slate-900">
-                          {gruppe?.Gruppenavn || "Ingen"}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-slate-500">
-                          Std. behov: <strong>{rolle.Behov}</strong>
-                        </span>
+                      <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={() => setSelectedRolleForModal(rolle)}
-                          className="text-[#2d5a3f] hover:underline font-medium cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingGruppeId(gruppe.GruppeID);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-[#2d5a3f] bg-[#eef5f1] hover:bg-[#d2e8d9] px-2.5 py-1 rounded-lg cursor-pointer border border-[#d2e8d9]"
                         >
-                          Se instruks
+                          <Edit2 className="w-3.5 h-3.5" />
+                          Rediger
                         </button>
+                        <ChevronDown
+                          className={`w-4 h-4 text-slate-400 transition ${apen ? "rotate-180" : ""}`}
+                        />
                       </div>
                     </div>
+
+                    {gruppe.Beskrivelse && (
+                      <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
+                        {gruppe.Beskrivelse}
+                      </p>
+                    )}
+
+                    <div className="text-xs space-y-1">
+                      <div className="flex items-center gap-1.5 text-slate-700">
+                        <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
+                        <span className="font-medium">{leder?.Navn || "Ikke satt"}</span>
+                        <span className="text-slate-400">Gruppeleder</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-slate-700">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
+                        <span className="font-medium">{nestleder?.Navn || "Ikke satt"}</span>
+                        <span className="text-slate-400">Nestleder</span>
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {medlemsnavn.length} medlemmer
+                    </div>
+
+                    {apen && (
+                      <ul className="pt-2 border-t border-slate-100 space-y-1">
+                        {medlemsnavn.length === 0 && (
+                          <li className="text-xs text-slate-400">Ingen medlemmer.</li>
+                        )}
+                        {medlemsnavn.map((p) => (
+                          <li key={p.PersonID} className="text-sm text-slate-700 flex items-center gap-1.5">
+                            {gruppe.GruppelederID === p.PersonID && (
+                              <Star className="w-3 h-3 fill-sky-500 text-sky-500 shrink-0" />
+                            )}
+                            {gruppe.NestlederID === p.PersonID && (
+                              <Star className="w-3 h-3 fill-amber-400 text-amber-400 shrink-0" />
+                            )}
+                            <span>{p.Navn}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 );
               })}
-            </div>
+            {db.grupper.filter((gruppe) => {
+              const ids = gruppetypeIderForFilter(db, groupTypeFilter);
+              if (ids.length === 0 && groupTypeFilter === "tjenestegruppe") return true;
+              return ids.includes(gruppe.GruppetypeID);
+            }).length === 0 && (
+              <p className="text-sm text-slate-500 bg-white border border-dashed border-slate-200 rounded-2xl p-6 text-center">
+                Ingen grupper i denne kategorien ennå.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* FANE 4: ROLLER */}
+      {activeTab === "roles" && (
+        <div className="space-y-4 max-w-2xl">
+          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <Layers className="w-5 h-5 text-[#2d5a3f]" />
+            <span>Roller & Standardbehov ({db.roller.length})</span>
+          </h3>
+
+          <div className="space-y-3">
+            {db.roller.map((rolle) => {
+              const gruppe = db.grupper.find((g) => g.GruppeID === rolle.GruppeID);
+              const antallKvalifiserte = db.personroller.filter(
+                (pr) => pr.RolleID === rolle.RolleID && pr.Aktiv
+              ).length;
+
+              return (
+                <div
+                  key={rolle.RolleID}
+                  className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-slate-900 text-sm">
+                      {rolle.Rollenavn}
+                    </h4>
+                    <span className="text-xs font-mono bg-[#eef5f1] text-[#2d5a3f] px-2 py-0.5 rounded font-bold border border-[#d2e8d9]">
+                      {rolle.RolleID}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">{rolle.Beskrivelse}</p>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
+                    <div>
+                      Tjenestegruppe:{" "}
+                      <span className="font-medium text-slate-900">
+                        {gruppe?.Gruppenavn || "Ingen"}
+                      </span>
+                      {antallKvalifiserte > 0 && (
+                        <span className="text-slate-400"> · {antallKvalifiserte} med personrolle</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-500">
+                        Std. behov: <strong>{rolle.Behov}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRolleForModal(rolle)}
+                        className="text-[#2d5a3f] hover:underline font-medium cursor-pointer"
+                      >
+                        Se instruks
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -978,55 +1182,77 @@ export const AdminView: React.FC<AdminViewProps> = ({
       {newPersonModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-900 mb-3">
-              Legg til ny person
+            <h3 className="text-lg font-bold text-slate-900 mb-1">
+              Legg til person
             </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Fornavn er nok. Etternavn tas med hvis det står i tabellen eller skrives inn.
+            </p>
 
             <div className="space-y-3 mb-6 text-xs">
               <div>
                 <label className="font-semibold text-slate-600 block mb-1">
-                  Fullt navn*:
+                  Navn
                 </label>
                 <input
                   type="text"
-                  placeholder="Fornavn Etternavn"
-                  value={newPersonData.Navn}
-                  onChange={(e) =>
-                    setNewPersonData((prev) => ({ ...prev, Navn: e.target.value }))
-                  }
+                  placeholder="F.eks. Magnar eller Pål Brenne"
+                  value={newFornavn}
+                  onChange={(e) => setNewFornavn(e.target.value)}
                   className="w-full border border-slate-300 rounded-xl p-2 bg-slate-50"
                 />
               </div>
 
-              <div>
-                <label className="font-semibold text-slate-600 block mb-1">
-                  E-postadresse*:
-                </label>
-                <input
-                  type="email"
-                  placeholder="navn@example.com"
-                  value={newPersonData.Epost}
-                  onChange={(e) =>
-                    setNewPersonData((prev) => ({ ...prev, Epost: e.target.value }))
-                  }
-                  className="w-full border border-slate-300 rounded-xl p-2 bg-slate-50"
-                />
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-600 block mb-1">
-                  Telefonnummer:
-                </label>
-                <input
-                  type="tel"
-                  placeholder="e.g. 912 34 567"
-                  value={newPersonData.Telefon}
-                  onChange={(e) =>
-                    setNewPersonData((prev) => ({ ...prev, Telefon: e.target.value }))
-                  }
-                  className="w-full border border-slate-300 rounded-xl p-2 bg-slate-50"
-                />
-              </div>
+              {newPersonSlots.length > 0 ? (
+                <div className="bg-[#eef5f1] border border-[#d2e8d9] rounded-xl p-3 text-slate-800">
+                  <div className="font-semibold mb-1">Tjeneste som tildeles</div>
+                  {newPersonSlots.map((s) => (
+                    <div key={`${s.gudstjenesteId}-${s.rolleId}`}>
+                      {s.rolleNavn} · {s.gudstjenesteId}
+                      {s.dato ? ` · ${s.dato}` : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="font-semibold text-slate-600 block mb-1">
+                      Gudstjeneste (valgfritt)
+                    </label>
+                    <select
+                      value={newPersonGudstjenesteId}
+                      onChange={(e) => setNewPersonGudstjenesteId(e.target.value)}
+                      className="w-full border border-slate-300 rounded-xl p-2 bg-slate-50"
+                    >
+                      <option value="">Ingen tildeling nå</option>
+                      {db.gudstjenester.map((g) => (
+                        <option key={g.GudstjenesteID} value={g.GudstjenesteID}>
+                          {g.Dato} · {g.Tema}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-semibold text-slate-600 block mb-1">
+                      Tjeneste / rolle (valgfritt)
+                    </label>
+                    <select
+                      value={newPersonRolleId}
+                      onChange={(e) => setNewPersonRolleId(e.target.value)}
+                      className="w-full border border-slate-300 rounded-xl p-2 bg-slate-50"
+                    >
+                      <option value="">Velg rolle</option>
+                      {db.roller
+                        .filter((r) => r.Aktiv)
+                        .map((r) => (
+                          <option key={r.RolleID} value={r.RolleID}>
+                            {r.Rollenavn}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex justify-end gap-2">
@@ -1039,7 +1265,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </button>
               <button
                 type="button"
-                disabled={!newPersonData.Navn || !newPersonData.Epost}
+                disabled={!newFornavn.trim()}
                 onClick={handleSaveNewPerson}
                 className="px-4 py-2 text-xs bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
               >
@@ -1152,25 +1378,61 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </select>
             </div>
 
+            <div className="border-t border-slate-100 pt-3 space-y-2">
+              <label className="text-xs font-semibold text-slate-600 block">
+                Eller opprett ny person
+              </label>
+              <input
+                type="text"
+                placeholder="Fornavn, eller fornavn etternavn"
+                value={assignNewFornavn}
+                onChange={(e) => setAssignNewFornavn(e.target.value)}
+                className="w-full text-sm border border-slate-300 rounded-xl p-2.5 bg-slate-50"
+              />
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setAssignModal(null)}
+                onClick={() => {
+                  setAssignModal(null);
+                  setAssignNewFornavn("");
+                }}
                 className="px-4 py-2 text-xs text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
               >
                 Avbryt
               </button>
-              <button
-                type="button"
-                disabled={!personToAssign}
-                onClick={handleAssignPerson}
-                className="px-4 py-2 text-xs bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
-              >
-                Lagre tildeling
-              </button>
+              {assignNewFornavn.trim() ? (
+                <button
+                  type="button"
+                  onClick={handleCreateAndAssign}
+                  className="px-4 py-2 text-xs bg-[#2d5a3f] hover:bg-[#234731] text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  Opprett og tildel
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!personToAssign}
+                  onClick={handleAssignPerson}
+                  className="px-4 py-2 text-xs bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  Lagre tildeling
+                </button>
+              )}
             </div>
           </div>
         </div>
+      )}
+
+      {editingGruppeId && (
+        <GroupAdminModal
+          key={editingGruppeId}
+          gruppeId={editingGruppeId}
+          db={db}
+          onUpdateDb={onUpdateDb}
+          onClose={() => setEditingGruppeId(null)}
+        />
       )}
 
       {/* MODAL: Rollebeskrivelse */}

@@ -797,8 +797,8 @@ export const initialPersonerImport: PersonerImport[] = [
 ];
 
 export const initialGudstjenesterImport: GudstjenesterImport[] = [
-  { GudstjenesteID: "GUD001", Dato: "2026-08-23", Tid: "11:00", Tema: "Fellesskap og disippelskap", MøtelederGammel: "Magnar Totland", TalerGammel: "Andreas Lund", LovsangGammel: "Ingrid Hansen", LydGammel: "Jonas Berg", VertGammel: "Eirik Dahl" },
-  { GudstjenesteID: "GUD002", Dato: "2026-08-30", Tid: "11:00", Tema: "Bønn som forandrer", MøtelederGammel: "Andreas Lund", TalerGammel: "Magnar Totland", LovsangGammel: "Olav Hauge", LydGammel: "Henrik Olsen", VertGammel: "Thomas Breivik" },
+  { GudstjenesteID: "GUD001", Dato: "2026-08-23", Tid: "11:00", Tema: "Fellesskap og disippelskap", Leder: "Magnar Totland", Taler: "Andreas Lund", Lovsang: "Ingrid Hansen", Lyd: "Jonas Berg", Møtevert: "Eirik Dahl" },
+  { GudstjenesteID: "GUD002", Dato: "2026-08-30", Tid: "11:00", Tema: "Bønn som forandrer", Leder: "Andreas Lund", Taler: "Magnar Totland", Lovsang: "Olav Hauge", Lyd: "Henrik Olsen", Møtevert: "Thomas Breivik" },
 ];
 
 export const initialRollebeskrivelseImport: RollebeskrivelseImport[] = [

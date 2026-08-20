@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   DatabaseState,
+  getEffektivtBehov,
   svarPaaTildeling,
   velgDatoForPerson,
 } from "../services/dataService";
@@ -16,33 +17,93 @@ import {
   BookOpen,
   Check,
   X,
-  User,
   Plus,
   Info,
   CalendarPlus,
   Sparkles,
-  ChevronDown,
 } from "lucide-react";
 
 interface PersonalViewProps {
   db: DatabaseState;
   selectedPersonId: string;
   onUpdateDb: (updatedDb: DatabaseState) => void;
-  onSelectPerson?: (personId: string) => void;
+}
+
+type PåmeldingsFilter = "ledige" | "mine" | "alle";
+type PåmeldingsStatus = "ledig" | "min-venter" | "min-bekreftet" | "full";
+
+function formatDato(dato: string): string {
+  const parsed = new Date(`${dato}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return dato;
+  return parsed.toLocaleDateString("nb-NO", {
+    weekday: "short",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function byggPåmeldingsrader(
+  db: DatabaseState,
+  personId: string,
+  rolle: Rolle
+) {
+  return db.gudstjenester
+    .slice()
+    .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`))
+    .map((g) => {
+      const tildelinger = db.tildelinger.filter(
+        (t) => t.GudstjenesteID === g.GudstjenesteID && t.RolleID === rolle.RolleID
+      );
+      const personerPå = tildelinger
+        .map((t) => {
+          const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+          const status = (svar?.Svar || "Venter") as SvarStatus;
+          if (status === "Avvist") return null;
+          const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
+          return {
+            personId: t.PersonID,
+            navn: p?.Fornavn || p?.Navn || t.PersonID,
+            status,
+          };
+        })
+        .filter((x): x is { personId: string; navn: string; status: SvarStatus } => x !== null);
+
+      const behov = getEffektivtBehov(g.GudstjenesteID, rolle, db.tjenestebehov);
+      const ledige = Math.max(0, behov - personerPå.length);
+      const min = personerPå.find((p) => p.personId === personId);
+      const minAvvist = tildelinger.some((t) => {
+        if (t.PersonID !== personId) return false;
+        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+        return svar?.Svar === "Avvist";
+      });
+
+      let status: PåmeldingsStatus = "full";
+      if (min?.status === "Bekreftet") status = "min-bekreftet";
+      else if (min && min.status !== "Avvist") status = "min-venter";
+      else if (ledige > 0 || minAvvist) status = "ledig";
+
+      return { gudstjeneste: g, behov, ledige, personerPå, status };
+    });
 }
 
 export const PersonalView: React.FC<PersonalViewProps> = ({
   db,
   selectedPersonId,
   onUpdateDb,
-  onSelectPerson,
 }) => {
   const [selectedRolleForModal, setSelectedRolleForModal] = useState<Rolle | null>(null);
   const [showDatePickerForRolle, setShowDatePickerForRolle] = useState<Rolle | null>(null);
+  const [datePickerFilter, setDatePickerFilter] = useState<"ledige" | "mine" | "alle">("alle");
   const [actionFeedback, setActionFeedback] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
+
+  const openDatePicker = (rolle: Rolle) => {
+    setDatePickerFilter("alle");
+    setShowDatePickerForRolle(rolle);
+  };
 
   const person = db.personer.find((p) => p.PersonID === selectedPersonId);
 
@@ -53,7 +114,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
           <Info className="w-8 h-8 text-amber-600 mx-auto" />
         </div>
         <h2 className="text-xl font-bold text-slate-900">Ingen person valgt</h2>
-        <p className="text-sm text-slate-600 mt-1">Velg en person for å se Min side.</p>
+        <p className="text-sm text-slate-600 mt-1">Velg en person øverst til høyre for å se Min side.</p>
       </div>
     );
   }
@@ -141,9 +202,8 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
       const g = db.gudstjenester.find((item) => item.GudstjenesteID === gudstjenesteId);
       setActionFeedback({
         type: "success",
-        message: `Flott! Du er nå registrert og bekreftet som ${rolle.Rollenavn} den ${g?.Dato || ""}.`,
+        message: `Du er påmeldt som ${rolle.Rollenavn} ${g?.Dato || ""}. Du kan melde deg på flere datoer.`,
       });
-      setShowDatePickerForRolle(null);
     } else {
       setActionFeedback({
         type: "error",
@@ -152,11 +212,6 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
     }
     setTimeout(() => setActionFeedback(null), 4500);
   };
-
-  // Hurtigvalg-personer for test (som i referansebildet: Irene, Gunnar, Magnar, Kari, Ola, Astrid)
-  const testPersoner = ["P002", "P005", "P001", "P004", "P003", "P006"]
-    .map((id) => db.personer.find((p) => p.PersonID === id))
-    .filter((p): p is typeof db.personer[0] => p !== undefined);
 
   // Samle alle unike roller som personen enten har i personroller ELLER har tildelinger for
   const visningsRoller: Rolle[] = [];
@@ -230,71 +285,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
         </div>
       </div>
 
-      {/* 2. PERSONVELGER: Som i referansebildet BekreftOppgave.png */}
-      <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-xs space-y-4">
-        <div>
-          <label
-            htmlFor="person-select"
-            className="block text-sm font-bold text-slate-900 mb-2"
-          >
-            Velg navnet ditt
-          </label>
-          <div className="relative">
-            <select
-              id="person-select"
-              value={selectedPersonId}
-              onChange={(e) => {
-                if (onSelectPerson) {
-                  onSelectPerson(e.target.value);
-                }
-              }}
-              className="w-full text-sm font-semibold text-slate-800 bg-white border border-slate-300 rounded-2xl px-4 py-3 appearance-none focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] cursor-pointer shadow-2xs"
-            >
-              {db.personer
-                .filter((p) => p.Aktiv)
-                .map((p) => (
-                  <option key={p.PersonID} value={p.PersonID}>
-                    {p.Navn}
-                  </option>
-                ))}
-            </select>
-            <ChevronDown className="w-5 h-5 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
-        </div>
-
-        {/* Hurtigvalg for test */}
-        <div className="pt-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mb-2.5">
-            <User className="w-3.5 h-3.5" />
-            <span>Hurtigvalg for test:</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {testPersoner.map((p) => {
-              const isSelected = p.PersonID === selectedPersonId;
-              return (
-                <button
-                  key={p.PersonID}
-                  type="button"
-                  onClick={() => {
-                    if (onSelectPerson) {
-                      onSelectPerson(p.PersonID);
-                    }
-                  }}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer ${
-                    isSelected
-                      ? "bg-[#1e3e2b] text-white shadow-2xs"
-                      : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200"
-                  }`}
-                >
-                  {p.Fornavn}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* 3. OPPGAVER GRUPPERT PER ROLLE: Nøyaktig som i referansebildet BekreftOppgave.png */}
+      {/* Oppgaver gruppert per rolle */}
       {visningsRoller.length === 0 ? (
         <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-2">
           <Info className="w-8 h-8 text-slate-400 mx-auto" />
@@ -344,7 +335,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() => setShowDatePickerForRolle(rolle)}
+                    onClick={() => openDatePicker(rolle)}
                     className="text-xs font-semibold text-[#2d5a3f] hover:text-[#1e3e2b] bg-white hover:bg-[#eef5f1] border border-[#d2e8d9] px-3 py-1 rounded-full transition flex items-center gap-1 cursor-pointer shadow-2xs"
                   >
                     <Plus className="w-3.5 h-3.5" />
@@ -361,7 +352,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                   </p>
                   <button
                     type="button"
-                    onClick={() => setShowDatePickerForRolle(rolle)}
+                    onClick={() => openDatePicker(rolle)}
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#2d5a3f] hover:bg-[#1e3e2b] text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
                   >
                     <CalendarPlus className="w-4 h-4" />
@@ -499,116 +490,189 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
         })
       )}
 
-      {/* MODAL: Velg en annen dato for en bestemt rolle */}
+      {/* Påmelding: nesten fullskjerm */}
       {showDatePickerForRolle && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto space-y-4">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-[#eef5f1] text-[#2d5a3f] rounded-xl border border-[#d2e8d9]">
-                  <CalendarPlus className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                    Velg dato
-                  </span>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    Ny dato for {showDatePickerForRolle.Rollenavn}
-                  </h3>
-                </div>
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex justify-center p-0 sm:p-4 animate-fadeIn">
+          <div className="bg-white w-full h-full sm:h-auto sm:max-h-[100dvh] sm:max-w-5xl sm:my-4 sm:rounded-3xl shadow-2xl border-0 sm:border sm:border-slate-200 flex flex-col overflow-hidden">
+            <div className="px-4 sm:px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-3 shrink-0">
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Meld deg på
+                </span>
+                <h3 className="text-xl sm:text-2xl font-bold text-slate-900">
+                  {showDatePickerForRolle.Rollenavn}
+                </h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  Se ledige, ubekreftede og fulle søndager. Ett trykk melder deg på.
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowDatePickerForRolle(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer shrink-0"
+                aria-label="Lukk"
               >
-                <X className="w-5 h-5" />
+                <X className="w-6 h-6" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-600">
-              Velg en søndag du ønsker å bidra som{" "}
-              <strong>{showDatePickerForRolle.Rollenavn}</strong>:
-            </p>
+            {actionFeedback && (
+              <div
+                className={`mx-4 sm:mx-6 mt-4 p-3 rounded-2xl text-sm ${
+                  actionFeedback.type === "success"
+                    ? "bg-[#eef5f1] text-[#1e3e2b] border border-[#d2e8d9]"
+                    : "bg-amber-50 text-amber-900 border border-amber-200"
+                }`}
+              >
+                {actionFeedback.message}
+              </div>
+            )}
 
-            {/* Liste over alle gudstjenester i semesteret */}
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {db.gudstjenester.map((g) => {
-                // Sjekk om personen allerede er tildelt denne rollen på denne datoen
-                const erAlleredeTildelt = db.tildelinger.some(
-                  (t) =>
-                    t.GudstjenesteID === g.GudstjenesteID &&
-                    t.RolleID === showDatePickerForRolle.RolleID &&
-                    t.PersonID === person.PersonID
-                );
+            {(() => {
+              const rader = byggPåmeldingsrader(db, person.PersonID, showDatePickerForRolle);
+              const antallLedige = rader.filter((r) => r.status === "ledig").length;
+              const antallMine = rader.filter(
+                (r) => r.status === "min-venter" || r.status === "min-bekreftet"
+              ).length;
+              const antallFulle = rader.filter((r) => r.status === "full").length;
+              const filtrert = rader.filter((r) => {
+                if (datePickerFilter === "ledige") return r.status === "ledig";
+                if (datePickerFilter === "mine") {
+                  return r.status === "min-venter" || r.status === "min-bekreftet";
+                }
+                return true;
+              });
 
-                const svarObj = erAlleredeTildelt
-                  ? db.svar.find(
-                      (s) =>
-                        db.tildelinger.some(
-                          (t) =>
-                            t.TildelingID === s.TildelingID &&
-                            t.GudstjenesteID === g.GudstjenesteID &&
-                            t.PersonID === person.PersonID
-                        )
-                    )
-                  : null;
-
-                return (
-                  <div
-                    key={g.GudstjenesteID}
-                    className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition ${
-                      erAlleredeTildelt
-                        ? "bg-slate-50 border-slate-200 opacity-85"
-                        : "bg-white border-slate-200 hover:border-[#86efac] hover:bg-[#f4f8f5]"
-                    }`}
-                  >
-                    <div>
-                      <div className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <span>{g.Dato}</span>
-                        {g.Tid && (
-                          <span className="text-xs font-normal text-slate-500">
-                            kl. {g.Tid}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        {g.Tema || "Gudstjeneste"} &bull; {g.Sted}
-                      </div>
-                    </div>
-
-                    <div>
-                      {erAlleredeTildelt ? (
-                        <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-xl">
-                          {svarObj?.Svar === "Bekreftet"
-                            ? "Allerede bekreftet"
-                            : "Allerede satt opp"}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleVelgAnnenDato(g.GudstjenesteID, showDatePickerForRolle)}
-                          className="px-3.5 py-1.5 bg-[#2d5a3f] hover:bg-[#1e3e2b] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1 cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Velg denne</span>
-                        </button>
-                      )}
-                    </div>
+              return (
+                <>
+                  <div className="px-4 sm:px-6 py-3 flex flex-wrap gap-2 shrink-0">
+                    {(
+                      [
+                        ["alle", `Alle (${rader.length})`],
+                        ["ledige", `Ledige (${antallLedige})`],
+                        ["mine", `Mine (${antallMine})`],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setDatePickerFilter(id)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold cursor-pointer transition ${
+                          datePickerFilter === id
+                            ? "bg-[#2d5a3f] text-white"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <span className="text-xs text-slate-400 self-center ml-auto">
+                      {antallFulle} fulle
+                    </span>
                   </div>
-                );
-              })}
-            </div>
 
-            <div className="flex justify-end pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setShowDatePickerForRolle(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                Lukk
-              </button>
-            </div>
+                  <div className="flex-1 overflow-y-auto px-4 sm:px-6 pb-4 space-y-2">
+                    {filtrert.length === 0 ? (
+                      <div className="text-center py-12 text-sm text-slate-500">
+                        Ingen gudstjenester i dette filteret.
+                      </div>
+                    ) : (
+                      filtrert.map((rad) => {
+                        const { gudstjeneste: g, behov, ledige, personerPå, status } = rad;
+                        const kanMelde = status === "ledig";
+                        return (
+                          <div
+                            key={g.GudstjenesteID}
+                            className={`p-4 sm:p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                              status === "ledig"
+                                ? "bg-[#f4f8f5] border-[#d2e8d9]"
+                                : status === "full"
+                                ? "bg-slate-50 border-slate-200"
+                                : "bg-white border-slate-200"
+                            }`}
+                          >
+                            <div className="min-w-0 space-y-1.5">
+                              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                                <span className="text-base font-bold text-slate-900">
+                                  {formatDato(g.Dato)}
+                                </span>
+                                {g.Tid && (
+                                  <span className="text-sm text-slate-500">kl. {g.Tid}</span>
+                                )}
+                              </div>
+                              <div className="text-sm text-slate-600">
+                                {g.Tema || "Gudstjeneste"}
+                                {g.Sted ? ` · ${g.Sted}` : ""}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                {personerPå.length} av {behov} påmeldt
+                                {ledige > 0 ? ` · ${ledige} ledig` : ""}
+                              </div>
+                              {personerPå.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                  {personerPå.map((p) => (
+                                    <span
+                                      key={p.personId}
+                                      className={`text-[11px] font-medium px-2 py-0.5 rounded-lg ${
+                                        p.status === "Bekreftet"
+                                          ? "bg-[#eef5f1] text-[#1e3e2b] border border-[#d2e8d9]"
+                                          : "bg-amber-50 text-amber-800 border border-amber-200"
+                                      }`}
+                                    >
+                                      {p.navn}
+                                      {p.status === "Venter" ? " (venter)" : ""}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="shrink-0 self-stretch sm:self-center">
+                              {kanMelde ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleVelgAnnenDato(g.GudstjenesteID, showDatePickerForRolle)
+                                  }
+                                  className="w-full sm:w-auto px-5 py-3 bg-[#2d5a3f] hover:bg-[#1e3e2b] text-white text-sm font-semibold rounded-2xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                                >
+                                  <Check className="w-4 h-4" />
+                                  <span>Meld meg på</span>
+                                </button>
+                              ) : status === "min-bekreftet" ? (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1e3e2b] bg-[#eef5f1] border border-[#d2e8d9] px-3 py-2 rounded-xl">
+                                  <Check className="w-4 h-4" />
+                                  Du stiller
+                                </span>
+                              ) : status === "min-venter" ? (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+                                  <Clock3 className="w-4 h-4" />
+                                  Ditt forslag venter
+                                </span>
+                              ) : (
+                                <span className="inline-flex text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl">
+                                  Fullt
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="px-4 sm:px-6 py-3 border-t border-slate-100 flex justify-end shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePickerForRolle(null)}
+                      className="px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                    >
+                      Ferdig
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

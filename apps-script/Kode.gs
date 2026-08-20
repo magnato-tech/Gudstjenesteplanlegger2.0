@@ -88,6 +88,22 @@ var MASTER_SHEETS = {
   },
 };
 
+/** Kolonner F–Q i Gudstjenester_import → Roller.RolleID */
+var IMPORT_ROLE_COLUMNS = [
+  { col: "Leder", rolleId: "R001" },
+  { col: "Taler", rolleId: "R002" },
+  { col: "Forbønn", rolleId: "R003" },
+  { col: "Barnekirke", rolleId: "R004" },
+  { col: "Lovsang", rolleId: "R005" },
+  { col: "Lyd", rolleId: "R006" },
+  { col: "Bilde", rolleId: "R007" },
+  { col: "Møtevert", rolleId: "R008" },
+  { col: "Rigging", rolleId: "R009" },
+  { col: "Kjøkken", rolleId: "R010" },
+  { col: "Baking", rolleId: "R011" },
+  { col: "Pynting", rolleId: "R012" },
+];
+
 var IMPORT_SHEETS = {
   personerImport: {
     name: "Personer_import",
@@ -101,8 +117,9 @@ var IMPORT_SHEETS = {
   gudstjenesterImport: {
     name: "Gudstjenester_import",
     columns: [
-      "GudstjenesteID", "Dato", "Tid", "Tema",
-      "MøtelederGammel", "TalerGammel", "LovsangGammel", "LydGammel", "VertGammel",
+      "GudstjenesteID", "Dato", "Tid", "Sted", "Tema", "Bibeltekst", "Kollekt", "Merknad",
+      "Leder", "Taler", "Forbønn", "Barnekirke", "Lovsang", "Lyd", "Bilde",
+      "Møtevert", "Rigging", "Kjøkken", "Baking", "Pynting",
     ],
   },
   rollebeskrivelseImport: {
@@ -126,8 +143,20 @@ function doGet(e) {
       return json_({ ok: true, service: "Gudstjenesteplanlegger2.0", spreadsheetId: SPREADSHEET_ID });
     }
 
+    if (action === "inspectImport") {
+      return json_({ ok: true, info: inspectImportSheets_() });
+    }
+
     if (action === "load") {
       return json_({ ok: true, data: loadDatabase() });
+    }
+
+    if (action === "migrateImport") {
+      var dryGet = parseDryRun_(params.dryRun, true);
+      if (dryGet) {
+        return json_({ ok: true, dryRun: true, report: migrerGudstjenesterImport(true) });
+      }
+      return json_(runMigrateImportLocked_(false));
     }
 
     return json_({ ok: false, error: "Ukjent action: " + action }, 400);
@@ -153,6 +182,12 @@ function doPost(e) {
       }
       saveDatabase(body.data);
       return json_({ ok: true, data: loadDatabase() });
+    }
+
+    if (action === "migrateImport") {
+      var dryPost = parseDryRun_(body.dryRun != null ? body.dryRun : (e.parameter && e.parameter.dryRun), true);
+      var report = migrerGudstjenesterImport(dryPost);
+      return json_({ ok: true, dryRun: dryPost, report: report });
     }
 
     return json_({ ok: false, error: "Ukjent action: " + action }, 400);
@@ -229,12 +264,17 @@ function readSheet_(ss, spec) {
   var values = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
   if (!values.length) return [];
 
-  var headers = values[0].map(function (h) { return String(h).trim(); });
+  var headerRow = 0;
+  if (spec.name === "Gudstjenester_import") {
+    headerRow = findHeaderRow_(values, "GudstjenesteID");
+  }
+
+  var headers = values[headerRow].map(function (h) { return String(h).trim(); });
   var rows = [];
   var i;
   var j;
 
-  for (i = 1; i < values.length; i++) {
+  for (i = headerRow + 1; i < values.length; i++) {
     var raw = values[i];
     var empty = true;
     for (j = 0; j < raw.length; j++) {
@@ -258,6 +298,18 @@ function readSheet_(ss, spec) {
     rows.push(obj);
   }
   return rows;
+}
+
+function findHeaderRow_(values, requiredHeader) {
+  var want = String(requiredHeader).trim().toLowerCase();
+  var i;
+  var j;
+  for (i = 0; i < values.length; i++) {
+    for (j = 0; j < values[i].length; j++) {
+      if (String(values[i][j]).trim().toLowerCase() === want) return i;
+    }
+  }
+  return 0;
 }
 
 function isBlankRecord_(obj, spec) {
@@ -368,6 +420,405 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+function inspectImportSheets_() {
+  var ss = getSpreadsheet_();
+  var sheets = ss.getSheets().map(function (s) {
+    return {
+      name: s.getName(),
+      lastRow: s.getLastRow(),
+      lastCol: s.getLastColumn(),
+    };
+  });
+  var name = IMPORT_SHEETS.gudstjenesterImport.name;
+  var sheet = ss.getSheetByName(name);
+  var headers = [];
+  var sample = [];
+  if (sheet && sheet.getLastRow() >= 1 && sheet.getLastColumn() >= 1) {
+    headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    var rows = Math.min(3, Math.max(0, sheet.getLastRow() - 1));
+    if (rows > 0) {
+      sample = sheet.getRange(2, 1, rows, sheet.getLastColumn()).getDisplayValues();
+    }
+  }
+  return {
+    sheets: sheets,
+    importName: name,
+    found: !!sheet,
+    headers: headers,
+    sample: sample,
+  };
+}
+
+function parseDryRun_(val, defaultValue) {
+  if (val === undefined || val === null || val === "") return defaultValue;
+  if (val === true || val === false) return val;
+  var s = String(val).trim().toLowerCase();
+  if (s === "false" || s === "0" || s === "nei" || s === "no") return false;
+  if (s === "true" || s === "1" || s === "ja" || s === "yes") return true;
+  return defaultValue;
+}
+
+function runMigrateImportLocked_(dryRun) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+    var report = migrerGudstjenesterImport(dryRun);
+    return { ok: true, dryRun: !!dryRun, report: report };
+  } catch (err) {
+    return { ok: false, dryRun: !!dryRun, error: String(err) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Les Gudstjenester_import (B–E + Leder–Pynting) og fyll mastertabeller.
+ * Importfanen skrives aldri. Idempotent for tildelinger og Tjenestebehov.
+ * @param {boolean} dryRun hvis true, skriv ingenting
+ */
+function migrerGudstjenesterImport(dryRun) {
+  ensureSchema_();
+  var ss = getSpreadsheet_();
+  var importRows = readSheet_(ss, IMPORT_SHEETS.gudstjenesterImport);
+  var personer = readSheet_(ss, MASTER_SHEETS.personer);
+  var roller = readSheet_(ss, MASTER_SHEETS.roller);
+  var gudstjenester = readSheet_(ss, MASTER_SHEETS.gudstjenester);
+  var tildelinger = readSheet_(ss, MASTER_SHEETS.tildelinger);
+  var svar = readSheet_(ss, MASTER_SHEETS.svar);
+  var tjenestebehov = readSheet_(ss, MASTER_SHEETS.tjenestebehov);
+  var personroller = readSheet_(ss, MASTER_SHEETS.personroller);
+
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "Europe/Oslo", "yyyy-MM-dd");
+  var nameIndex = buildPersonNameIndex_(personer);
+
+  var report = {
+    importRader: importRows.length,
+    gudstjenesterNye: 0,
+    gudstjenesterOppdatert: 0,
+    tildelingerNye: 0,
+    tildelingerHoppetOver: 0,
+    svarNye: 0,
+    tjenestebehovNye: 0,
+    personrollerNye: 0,
+    umatchedeNavn: [],
+    tvetydigeNavn: [],
+    tommeCeller: 0,
+  };
+
+  var gudById = indexBy_(gudstjenester, "GudstjenesteID");
+  var tildelingKeys = {};
+  var i;
+  for (i = 0; i < tildelinger.length; i++) {
+    tildelingKeys[tildelingKey_(tildelinger[i])] = true;
+  }
+  var svarByTildeling = {};
+  for (i = 0; i < svar.length; i++) {
+    svarByTildeling[String(svar[i].TildelingID)] = true;
+  }
+  var behovKeys = {};
+  for (i = 0; i < tjenestebehov.length; i++) {
+    behovKeys[String(tjenestebehov[i].GudstjenesteID) + "|" + String(tjenestebehov[i].RolleID)] = true;
+  }
+  var personrolleKeys = {};
+  for (i = 0; i < personroller.length; i++) {
+    personrolleKeys[String(personroller[i].PersonID) + "|" + String(personroller[i].RolleID)] = true;
+  }
+
+  var unmatchedSeen = {};
+  var ambiguousSeen = {};
+
+  for (i = 0; i < importRows.length; i++) {
+    var row = importRows[i];
+    var gudId = String(row.GudstjenesteID || "").trim();
+    if (!gudId) {
+      gudId = nextId_(gudstjenester, "GudstjenesteID", "GUD");
+    }
+    var dato = normalizeDate_(row.Dato);
+    var tid = normalizeTime_(row.Tid);
+    var tema = String(row.Tema || "").trim();
+    var sted = String(row.Sted || "").trim();
+    var bibel = String(row.Bibeltekst || "").trim();
+    var kollekt = String(row.Kollekt || "").trim();
+    var merknad = String(row.Merknad || "").trim();
+
+    var existingGud = gudById[gudId];
+    if (!existingGud) {
+      var nyGud = {
+        GudstjenesteID: gudId,
+        Dato: dato,
+        Tid: tid,
+        Sted: sted,
+        Tema: tema,
+        Bibeltekst: bibel,
+        Kollekt: kollekt,
+        Merknad: merknad,
+      };
+      gudstjenester.push(nyGud);
+      gudById[gudId] = nyGud;
+      report.gudstjenesterNye++;
+    } else {
+      var changed = false;
+      if (dato && existingGud.Dato !== dato) {
+        existingGud.Dato = dato;
+        changed = true;
+      }
+      if (tid && existingGud.Tid !== tid) {
+        existingGud.Tid = tid;
+        changed = true;
+      }
+      if (tema && existingGud.Tema !== tema) {
+        existingGud.Tema = tema;
+        changed = true;
+      }
+      if (sted && existingGud.Sted !== sted) {
+        existingGud.Sted = sted;
+        changed = true;
+      }
+      if (bibel && existingGud.Bibeltekst !== bibel) {
+        existingGud.Bibeltekst = bibel;
+        changed = true;
+      }
+      if (kollekt && existingGud.Kollekt !== kollekt) {
+        existingGud.Kollekt = kollekt;
+        changed = true;
+      }
+      if (merknad && existingGud.Merknad !== merknad) {
+        existingGud.Merknad = merknad;
+        changed = true;
+      }
+      if (changed) report.gudstjenesterOppdatert++;
+    }
+
+    var r;
+    for (r = 0; r < IMPORT_ROLE_COLUMNS.length; r++) {
+      var mapping = IMPORT_ROLE_COLUMNS[r];
+      var names = splitNames_(row[mapping.col]);
+      if (!names.length) {
+        report.tommeCeller++;
+        continue;
+      }
+      var n;
+      for (n = 0; n < names.length; n++) {
+        var rawName = names[n];
+        var match = matchPerson_(rawName, nameIndex);
+        if (match.status === "unmatched") {
+          if (!unmatchedSeen[rawName]) {
+            unmatchedSeen[rawName] = true;
+            report.umatchedeNavn.push({ navn: rawName, gudstjenesteId: gudId, rolle: mapping.col });
+          }
+          continue;
+        }
+        if (match.status === "ambiguous") {
+          if (!ambiguousSeen[rawName]) {
+            ambiguousSeen[rawName] = true;
+            report.tvetydigeNavn.push({ navn: rawName, gudstjenesteId: gudId, rolle: mapping.col });
+          }
+          continue;
+        }
+
+        var personId = match.person.PersonID;
+        var key = gudId + "|" + mapping.rolleId + "|" + personId;
+        if (tildelingKeys[key]) {
+          report.tildelingerHoppetOver++;
+          continue;
+        }
+
+        var tildelingId = nextId_(tildelinger, "TildelingID", "T");
+        var nyTildeling = {
+          TildelingID: tildelingId,
+          GudstjenesteID: gudId,
+          RolleID: mapping.rolleId,
+          PersonID: personId,
+          OpprettetDato: today,
+          SistEndret: today,
+        };
+        tildelinger.push(nyTildeling);
+        tildelingKeys[key] = true;
+        report.tildelingerNye++;
+
+        if (!svarByTildeling[tildelingId]) {
+          svar.push({
+            SvarID: nextId_(svar, "SvarID", "S"),
+            TildelingID: tildelingId,
+            PersonID: personId,
+            Svar: "Venter",
+            Kommentar: "",
+            SvartDato: "",
+          });
+          svarByTildeling[tildelingId] = true;
+          report.svarNye++;
+        }
+
+        var prKey = personId + "|" + mapping.rolleId;
+        if (!personrolleKeys[prKey]) {
+          personroller.push({
+            PersonRolleID: nextId_(personroller, "PersonRolleID", "PR"),
+            PersonID: personId,
+            RolleID: mapping.rolleId,
+            Aktiv: true,
+            FraDato: today,
+            TilDato: "",
+            Notat: "Opprettet fra Gudstjenester_import",
+            OpprettetDato: today,
+            SistEndret: today,
+          });
+          personrolleKeys[prKey] = true;
+          report.personrollerNye++;
+        }
+      }
+    }
+  }
+
+  var g;
+  var rolle;
+  for (g = 0; g < gudstjenester.length; g++) {
+    var gid = String(gudstjenester[g].GudstjenesteID || "").trim();
+    if (!gid) continue;
+    for (rolle = 0; rolle < roller.length; rolle++) {
+      var rolleRec = roller[rolle];
+      if (rolleRec.Aktiv === false) continue;
+      var rid = String(rolleRec.RolleID || "").trim();
+      if (!rid) continue;
+      var bKey = gid + "|" + rid;
+      if (behovKeys[bKey]) continue;
+      var antall = Number(rolleRec.Behov);
+      if (isNaN(antall) || antall < 1) antall = 1;
+      tjenestebehov.push({
+        TjenestebehovID: nextId_(tjenestebehov, "TjenestebehovID", "TB"),
+        GudstjenesteID: gid,
+        RolleID: rid,
+        Antall: antall,
+        Aktiv: true,
+        Notat: "",
+        OpprettetDato: today,
+        SistEndret: today,
+      });
+      behovKeys[bKey] = true;
+      report.tjenestebehovNye++;
+    }
+  }
+
+  if (!dryRun) {
+    writeSheet_(ss, MASTER_SHEETS.gudstjenester, gudstjenester);
+    writeSheet_(ss, MASTER_SHEETS.tildelinger, tildelinger);
+    writeSheet_(ss, MASTER_SHEETS.svar, svar);
+    writeSheet_(ss, MASTER_SHEETS.tjenestebehov, tjenestebehov);
+    writeSheet_(ss, MASTER_SHEETS.personroller, personroller);
+  }
+
+  report.skrevet = !dryRun;
+  return report;
+}
+
+function buildPersonNameIndex_(personer) {
+  var byNavn = {};
+  var byFornavn = {};
+  var i;
+  for (i = 0; i < personer.length; i++) {
+    var p = personer[i];
+    var navn = normalizeName_(p.Navn);
+    if (navn) {
+      if (!byNavn[navn]) byNavn[navn] = [];
+      byNavn[navn].push(p);
+    }
+    var fn = normalizeName_(p.Fornavn);
+    if (!fn && p.Navn) fn = normalizeName_(String(p.Navn).trim().split(/\s+/)[0]);
+    if (fn) {
+      if (!byFornavn[fn]) byFornavn[fn] = [];
+      byFornavn[fn].push(p);
+    }
+  }
+  return { byNavn: byNavn, byFornavn: byFornavn };
+}
+
+function matchPerson_(rawName, index) {
+  var key = normalizeName_(rawName);
+  if (!key) return { status: "unmatched" };
+  var navnHits = index.byNavn[key] || [];
+  if (navnHits.length === 1) return { status: "ok", person: navnHits[0] };
+  if (navnHits.length > 1) return { status: "ambiguous" };
+  var fnHits = index.byFornavn[key] || [];
+  if (fnHits.length === 1) return { status: "ok", person: fnHits[0] };
+  if (fnHits.length > 1) return { status: "ambiguous" };
+  return { status: "unmatched" };
+}
+
+function splitNames_(val) {
+  var text = String(val == null ? "" : val).trim();
+  if (!text) return [];
+  var parts = text.split(/[,;]+/);
+  var out = [];
+  var i;
+  for (i = 0; i < parts.length; i++) {
+    var n = String(parts[i]).trim();
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+function normalizeName_(s) {
+  return String(s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function normalizeDate_(s) {
+  var t = String(s || "").trim();
+  if (!t) return "";
+  var iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  var nordic = t.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})/);
+  if (nordic) {
+    var year = parseInt(nordic[3], 10);
+    if (year < 100) year += 2000;
+    return String(year) + "-" + pad2_(nordic[2]) + "-" + pad2_(nordic[1]);
+  }
+  return t;
+}
+
+function normalizeTime_(s) {
+  var t = String(s || "").trim();
+  if (!t) return "";
+  var m = t.match(/^(\d{1,2})[:.](\d{2})/);
+  if (m) return pad2_(m[1]) + ":" + m[2];
+  return t;
+}
+
+function pad2_(n) {
+  var s = String(n);
+  return s.length < 2 ? "0" + s : s;
+}
+
+function nextId_(records, field, prefix) {
+  var max = 0;
+  var i;
+  for (i = 0; i < records.length; i++) {
+    var m = String(records[i][field] || "").match(/(\d+)\s*$/);
+    if (m) {
+      var n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  var num = String(max + 1);
+  while (num.length < 3) num = "0" + num;
+  return prefix + num;
+}
+
+function indexBy_(records, field) {
+  var map = {};
+  var i;
+  for (i = 0; i < records.length; i++) {
+    var id = String(records[i][field] || "").trim();
+    if (id) map[id] = records[i];
+  }
+  return map;
+}
+
+function tildelingKey_(t) {
+  return String(t.GudstjenesteID) + "|" + String(t.RolleID) + "|" + String(t.PersonID);
+}
+
 /** Test fra editor: Kjør loadDatabase */
 function testLoad() {
   var data = loadDatabase();
@@ -375,4 +826,11 @@ function testLoad() {
   Logger.log("Gudstjenester: " + data.gudstjenester.length);
   Logger.log("Tildelinger: " + data.tildelinger.length);
   return data;
+}
+
+/** Test fra editor: dry-run av importmigrering */
+function testMigrateDryRun() {
+  var report = migrerGudstjenesterImport(true);
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
 }

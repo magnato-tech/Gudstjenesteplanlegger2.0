@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { loadDatabase, resetDatabase, DatabaseState } from "./services/dataService";
+import { loadDatabase, resetDatabase, DatabaseState, hentTilgang, visningErTillatt, AppView } from "./services/dataService";
 import { Header } from "./components/Header";
 import { PersonalView } from "./components/PersonalView";
 import { GroupLeaderView } from "./components/GroupLeaderView";
@@ -8,7 +8,7 @@ import { AdminView } from "./components/AdminView";
 export default function App() {
   const [db, setDb] = useState<DatabaseState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"personal" | "leader" | "admin">("personal");
+  const [activeView, setActiveView] = useState<AppView>("personal");
   const [selectedPersonId, setSelectedPersonId] = useState<string>("P001");
 
   useEffect(() => {
@@ -38,18 +38,40 @@ export default function App() {
       const personIdParam = params.get("personId");
       const viewParam = params.get("view");
 
+      let personId = selectedPersonId;
       if (personIdParam && db.personer.some((p) => p.PersonID === personIdParam)) {
+        personId = personIdParam;
         setSelectedPersonId(personIdParam);
-        setActiveView("personal");
       }
 
-      if (viewParam === "admin" || viewParam === "leader" || viewParam === "personal") {
-        setActiveView(viewParam);
+      const tilgang = hentTilgang(db, personId);
+      const requested = viewParam as AppView;
+      if (requested === "admin" || requested === "leader" || requested === "personal") {
+        setActiveView(visningErTillatt(tilgang, requested) ? requested : "personal");
+      } else if (personIdParam) {
+        setActiveView("personal");
       }
     } catch (e) {
       console.warn("Kunne ikke lese URL-parametre:", e);
     }
   }, [db]);
+
+  useEffect(() => {
+    if (!db) return;
+    const tilgang = hentTilgang(db, selectedPersonId);
+    if (!visningErTillatt(tilgang, activeView)) {
+      setActiveView("personal");
+    }
+  }, [db, selectedPersonId]);
+
+  const handleSelectPerson = (personId: string) => {
+    setSelectedPersonId(personId);
+    if (!db) return;
+    const tilgang = hentTilgang(db, personId);
+    if (!visningErTillatt(tilgang, activeView)) {
+      setActiveView("personal");
+    }
+  };
 
   const handleUpdateDb = (updatedDb: DatabaseState) => {
     setDb(updatedDb);
@@ -79,7 +101,7 @@ export default function App() {
         activeView={activeView}
         setActiveView={setActiveView}
         selectedPersonId={selectedPersonId}
-        setSelectedPersonId={setSelectedPersonId}
+        setSelectedPersonId={handleSelectPerson}
         onResetData={handleResetData}
       />
 
@@ -90,24 +112,23 @@ export default function App() {
             db={db}
             selectedPersonId={selectedPersonId}
             onUpdateDb={handleUpdateDb}
-            onSelectPerson={(personId) => setSelectedPersonId(personId)}
           />
         )}
 
-        {activeView === "leader" && (
+        {activeView === "leader" && visningErTillatt(hentTilgang(db, selectedPersonId), "leader") && (
           <GroupLeaderView
             db={db}
             selectedPersonId={selectedPersonId}
             onUpdateDb={handleUpdateDb}
-            onSelectPerson={(personId) => setSelectedPersonId(personId)}
+            onSelectPerson={handleSelectPerson}
           />
         )}
 
-        {activeView === "admin" && (
+        {activeView === "admin" && visningErTillatt(hentTilgang(db, selectedPersonId), "admin") && (
           <AdminView
             db={db}
             onUpdateDb={handleUpdateDb}
-            onSelectPerson={(personId) => setSelectedPersonId(personId)}
+            onSelectPerson={handleSelectPerson}
           />
         )}
       </main>

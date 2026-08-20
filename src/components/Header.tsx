@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import { DatabaseState, genererPersonligLenke } from "../services/dataService";
-import { Person } from "../types/database";
+import { DatabaseState, genererPersonligLenke, hentTilgang, AppView } from "../services/dataService";
 import {
   Calendar,
   Users,
@@ -17,8 +16,8 @@ import {
 
 interface HeaderProps {
   db: DatabaseState;
-  activeView: "personal" | "leader" | "admin";
-  setActiveView: (view: "personal" | "leader" | "admin") => void;
+  activeView: AppView;
+  setActiveView: (view: AppView) => void;
   selectedPersonId: string;
   setSelectedPersonId: (id: string) => void;
   onResetData: () => void;
@@ -37,13 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const selectedPerson = db.personer.find((p) => p.PersonID === selectedPersonId);
-
-  // Finn ut om personen er gruppeleder
-  const isLeader = db.grupper.some(
-    (g) =>
-      g.Aktiv &&
-      (g.GruppelederID === selectedPersonId || g.NestlederID === selectedPersonId)
-  );
+  const tilgang = hentTilgang(db, selectedPersonId);
 
   const handleCopyLink = () => {
     const link = genererPersonligLenke(selectedPersonId);
@@ -117,13 +110,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {db.personer
                     .filter((p) => p.Aktiv)
                     .map((person) => {
-                      const personIsLeader = db.grupper.some(
-                        (g) =>
-                          g.Aktiv &&
-                          (g.GruppelederID === person.PersonID ||
-                            g.NestlederID === person.PersonID)
-                      );
-                      const isMagnar = person.PersonID === "P001";
+                      const personTilgang = hentTilgang(db, person.PersonID);
 
                       return (
                         <button
@@ -145,12 +132,12 @@ export const Header: React.FC<HeaderProps> = ({
                             </div>
                             <div className="text-xs text-slate-500 flex items-center gap-1.5">
                               <span className="font-mono text-[11px]">{person.PersonID}</span>
-                              {isMagnar && (
+                              {personTilgang.isAdmin && (
                                 <span className="bg-slate-100 text-slate-800 text-[10px] px-1.5 py-0.5 rounded font-medium border border-slate-200">
                                   Admin
                                 </span>
                               )}
-                              {personIsLeader && (
+                              {personTilgang.isLeader && (
                                 <span className="bg-[#eef5f1] text-[#2d5a3f] text-[10px] px-1.5 py-0.5 rounded font-medium border border-[#d2e8d9]">
                                   Tjenestegruppeleder
                                 </span>
@@ -202,6 +189,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Min side ({selectedPerson?.Fornavn})</span>
           </button>
 
+          {tilgang.views.includes("leader") && (
           <button
             onClick={() => setActiveView("leader")}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer ${
@@ -212,7 +200,7 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Users className="w-4 h-4" />
             <span>Tjenestegruppeleder</span>
-            {isLeader && (
+            {tilgang.isLeader && (
               <span
                 className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                   activeView === "leader"
@@ -224,7 +212,9 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             )}
           </button>
+          )}
 
+          {tilgang.views.includes("admin") && (
           <button
             onClick={() => setActiveView("admin")}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer ${
@@ -236,6 +226,7 @@ export const Header: React.FC<HeaderProps> = ({
             <ShieldCheck className="w-4 h-4" />
             <span>Administrator</span>
           </button>
+          )}
         </nav>
       </div>
 

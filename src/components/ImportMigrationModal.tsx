@@ -219,9 +219,9 @@ export const ImportMigrationModal: React.FC<ImportMigrationModalProps> = ({
                       <td className="p-2.5 font-mono">{g.GudstjenesteID}</td>
                       <td className="p-2.5">{g.Dato}</td>
                       <td className="p-2.5 font-medium text-slate-900">{g.Tema}</td>
-                      <td className="p-2.5">{g.MøtelederGammel || "-"}</td>
-                      <td className="p-2.5">{g.TalerGammel || "-"}</td>
-                      <td className="p-2.5">{g.LovsangGammel || "-"}</td>
+                      <td className="p-2.5">{g.Leder || g.MøtelederGammel || "-"}</td>
+                      <td className="p-2.5">{g.Taler || g.TalerGammel || "-"}</td>
+                      <td className="p-2.5">{g.Lovsang || g.LovsangGammel || "-"}</td>
                     </tr>
                   ))}
                 </tbody>
