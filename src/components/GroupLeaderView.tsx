@@ -13,6 +13,7 @@ import {
 } from "../services/dataService";
 import { Person, Rolle, Tjenestebehov } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
+import { RolleIkon } from "./RolleIkon";
 import {
   Users,
   Calendar,
@@ -23,6 +24,7 @@ import {
   UserPlus,
   BookOpen,
   Search,
+  X,
 } from "lucide-react";
 
 interface GroupLeaderViewProps {
@@ -30,21 +32,6 @@ interface GroupLeaderViewProps {
   selectedPersonId: string;
   onUpdateDb: (updatedDb: DatabaseState) => void;
   onSelectPerson: (personId: string) => void;
-}
-
-type DagStatus = "Deltar" | "Avventer" | "Deltar ikke" | "Avvist";
-
-function statusMerke(status: DagStatus) {
-  if (status === "Deltar") {
-    return "bg-emerald-50 text-emerald-800 border-emerald-200";
-  }
-  if (status === "Avventer") {
-    return "bg-amber-50 text-amber-800 border-amber-200";
-  }
-  if (status === "Avvist") {
-    return "bg-rose-50 text-rose-800 border-rose-200";
-  }
-  return "bg-slate-50 text-slate-600 border-slate-200";
 }
 
 export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
@@ -65,6 +52,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
   const [assignNewFornavn, setAssignNewFornavn] = useState("");
   const [medlemSok, setMedlemSok] = useState("");
   const [valgtMenighetsmedlem, setValgtMenighetsmedlem] = useState<Person | null>(null);
+  const [redigerMin, setRedigerMin] = useState<string | null>(null);
 
   const person = db.personer.find((p) => p.PersonID === selectedPersonId);
 
@@ -112,6 +100,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
       "Forespurt av gruppeleder"
     );
     onUpdateDb(updated);
+    handleCopyLink(personToAssign);
     setAssignModal(null);
     setPersonToAssign("");
     setAssignNewFornavn("");
@@ -121,6 +110,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     if (!assignModal) return;
     const fornavn = assignNewFornavn.trim();
     if (!fornavn) return;
+    const kjenteId = new Set(db.personer.map((p) => p.PersonID));
     const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, [
       {
         gudstjenesteId: assignModal.gudstjenesteId,
@@ -131,6 +121,8 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     ]);
     saveDatabase(updatedDb);
     onUpdateDb(updatedDb);
+    const ny = updatedDb.personer.find((p) => !kjenteId.has(p.PersonID));
+    if (ny) handleCopyLink(ny.PersonID);
     setAssignModal(null);
     setPersonToAssign("");
     setAssignNewFornavn("");
@@ -377,13 +369,6 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => handleCopyLink(valgtMenighetsmedlem.PersonID)}
-                className="text-xs font-semibold text-[#2d5a3f] bg-white border border-[#d2e8d9] px-3 py-1.5 rounded-lg cursor-pointer"
-              >
-                Forespør
-              </button>
-              <button
-                type="button"
                 onClick={() => handleLeggTilMedlem(valgtMenighetsmedlem.PersonID)}
                 className="text-xs font-semibold text-white bg-[#2d5a3f] px-3 py-1.5 rounded-lg cursor-pointer"
               >
@@ -433,7 +418,8 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
               <span>Bemanningsstatus for tjenestegruppens roller</span>
             </h3>
             <p className="text-xs text-slate-500">
-              Oversikt over kommende gudstjenester for rollene tilknyttet {currentGruppe?.Gruppenavn}.
+              Gul prikk = forespurt. Grønn = bekreftet. Trykk på navnet for å bytte. Kryss fjerner
+              personen.
             </p>
           </div>
         </div>
@@ -447,7 +433,11 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           </div>
         ) : (
           <div className="space-y-4">
-            {db.gudstjenester.map((gudstjeneste) => {
+            {db.gudstjenester
+              .filter((g) => g.Dato >= new Date().toISOString().split("T")[0])
+              .slice()
+              .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`))
+              .map((gudstjeneste) => {
               return (
                 <div
                   key={gudstjeneste.GudstjenesteID}
@@ -456,7 +446,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
                     <div>
                       <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        {new Date(gudstjeneste.Dato).toLocaleDateString("no-NO", {
+                        {new Date(`${gudstjeneste.Dato}T12:00:00`).toLocaleDateString("nb-NO", {
                           weekday: "long",
                           day: "numeric",
                           month: "long",
@@ -486,130 +476,146 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                           t.RolleID === rolle.RolleID
                       );
 
-                      const aktiveTildelinger = tildelinger.filter((t) => {
+                      const synlige = tildelinger.filter((t) => {
                         const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                        return !svar || svar.Svar !== "Avvist";
+                        return svar?.Svar !== "Avvist";
                       });
 
-                      const antallTildelt = aktiveTildelinger.length;
+                      const antallTildelt = synlige.length;
                       const dekkerMin = antallTildelt >= minBehov;
+                      const minNokkel = `${gudstjeneste.GudstjenesteID}:${rolle.RolleID}`;
+                      const viserMinFelt = redigerMin === minNokkel;
 
                       return (
                         <div
                           key={rolle.RolleID}
                           className={`p-3.5 rounded-xl border ${
-                            dekkerMin
-                              ? "bg-emerald-50/40 border-emerald-200"
-                              : "bg-amber-50/40 border-amber-200"
+                            dekkerMin ? "border-slate-200" : "border-amber-200"
                           }`}
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                            <span className="font-bold text-sm text-slate-900">
-                              {rolle.Rollenavn}
+                            <span className="inline-flex items-center gap-2 min-w-0">
+                              <RolleIkon rollenavn={rolle.Rollenavn} />
+                              <span className="font-bold text-sm text-slate-900">
+                                {rolle.Rollenavn}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedRolleForModal(rolle)}
+                                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                                title="Instruks"
+                              >
+                                <BookOpen className="w-3.5 h-3.5" />
+                              </button>
                             </span>
                             <div className="flex items-center gap-2">
-                              <label className="text-[11px] text-slate-500 flex items-center gap-1">
-                                Min.
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={minBehov}
-                                  onChange={(e) =>
-                                    handleSettMinBehov(
-                                      gudstjeneste.GudstjenesteID,
-                                      rolle.RolleID,
-                                      parseInt(e.target.value, 10) || 0
-                                    )
-                                  }
-                                  className="w-14 border border-slate-200 rounded-lg px-1.5 py-0.5 text-xs bg-white"
-                                />
-                              </label>
-                              <span
-                                className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                              {viserMinFelt && (
+                                <label className="text-[11px] text-slate-500 flex items-center gap-1">
+                                  Min.
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    autoFocus
+                                    value={minBehov}
+                                    onChange={(e) =>
+                                      handleSettMinBehov(
+                                        gudstjeneste.GudstjenesteID,
+                                        rolle.RolleID,
+                                        parseInt(e.target.value, 10) || 0
+                                      )
+                                    }
+                                    onBlur={() => setRedigerMin(null)}
+                                    className="w-14 border border-slate-200 rounded-lg px-1.5 py-0.5 text-xs bg-white"
+                                  />
+                                </label>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRedigerMin(viserMinFelt ? null : minNokkel)
+                                }
+                                className={`text-[11px] font-bold px-2 py-0.5 rounded-full cursor-pointer ${
                                   dekkerMin
                                     ? "bg-emerald-100 text-emerald-800"
                                     : "bg-amber-100 text-amber-900"
                                 }`}
+                                title="Endre minimum"
                               >
                                 {antallTildelt} / {minBehov}
-                              </span>
+                              </button>
                             </div>
                           </div>
 
-                            <div className="space-y-1.5 my-2">
-                              {tildelinger.length === 0 ? (
+                            <div className="space-y-1 my-2">
+                              {synlige.length === 0 ? (
                                 <span className="text-xs text-slate-400 italic block">
                                   Ingen satt opp ennå
                                 </span>
                               ) : (
-                                tildelinger.map((t) => {
+                                synlige.map((t) => {
                                   const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
                                   const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                                  const status: DeltakelseStatus =
-                                    svar?.Svar === "Bekreftet"
-                                      ? "Deltar"
-                                      : svar?.Svar === "Avvist"
-                                        ? "Avvist"
-                                        : "Avventer";
+                                  const erBekreftet = svar?.Svar === "Bekreftet";
+                                  const visningsnavn = p?.Fornavn || p?.Navn || t.PersonID;
 
                                   return (
                                     <div
                                       key={t.TildelingID}
-                                      className="flex flex-wrap items-center justify-between gap-2 text-xs bg-white/80 p-1.5 rounded-lg border border-slate-200/70"
+                                      className="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0"
                                     >
-                                      <span className="font-medium text-slate-800 truncate">
-                                        {p?.Navn || t.PersonID}
-                                      </span>
-                                      <div className="flex items-center gap-1.5 shrink-0">
-                                        <select
-                                          value={status}
-                                          onChange={(e) =>
-                                            handleSettStatus(
-                                              t.PersonID,
-                                              gudstjeneste.GudstjenesteID,
-                                              rolle.RolleID,
-                                              e.target.value as DeltakelseStatus,
-                                              false
-                                            )
-                                          }
-                                          className={`text-[10px] font-bold uppercase px-1.5 py-1 rounded-lg border ${statusMerke(status)}`}
-                                        >
-                                          <option value="Deltar">Deltar</option>
-                                          <option value="Avventer">Avventer</option>
-                                          <option value="Deltar ikke">Deltar ikke</option>
-                                          <option value="Avvist">Avvist</option>
-                                        </select>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            handleSettStatus(
-                                              t.PersonID,
-                                              gudstjeneste.GudstjenesteID,
-                                              rolle.RolleID,
-                                              "Avventer",
-                                              true
-                                            )
-                                          }
-                                          className="text-[10px] font-semibold text-[#2d5a3f] bg-[#eef5f1] border border-[#d2e8d9] px-2 py-1 rounded-lg cursor-pointer"
-                                        >
-                                          Forespør
-                                        </button>
-                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleSettStatus(
+                                            t.PersonID,
+                                            gudstjeneste.GudstjenesteID,
+                                            rolle.RolleID,
+                                            erBekreftet ? "Avventer" : "Deltar",
+                                            false
+                                          )
+                                        }
+                                        className="flex-1 min-w-0 flex items-center justify-between gap-2 text-left cursor-pointer rounded-lg px-1 py-0.5 hover:bg-slate-50"
+                                        title={
+                                          erBekreftet
+                                            ? "Trykk for å sette tilbake til forespurt"
+                                            : "Trykk for å bekrefte"
+                                        }
+                                      >
+                                        <span className="text-sm font-medium text-slate-800 truncate">
+                                          {visningsnavn}
+                                        </span>
+                                        <span className="inline-flex items-center gap-1.5 shrink-0">
+                                          <span
+                                            className={`w-2.5 h-2.5 rounded-full ${
+                                              erBekreftet ? "bg-emerald-500" : "bg-amber-400"
+                                            }`}
+                                            aria-hidden
+                                          />
+                                        </span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleSettStatus(
+                                            t.PersonID,
+                                            gudstjeneste.GudstjenesteID,
+                                            rolle.RolleID,
+                                            "Deltar ikke",
+                                            false
+                                          )
+                                        }
+                                        className="p-1 text-slate-300 hover:text-rose-600 cursor-pointer"
+                                        title="Fjern"
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   );
                                 })
                               )}
                             </div>
 
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-                            <button
-                              type="button"
-                              onClick={() => setSelectedRolleForModal(rolle)}
-                              className="text-slate-500 hover:text-slate-800 underline flex items-center gap-1 cursor-pointer"
-                            >
-                              <BookOpen className="w-3 h-3" />
-                              Instruks
-                            </button>
+                          <div className="pt-2 flex justify-end">
                             <button
                               type="button"
                               onClick={() =>
@@ -620,7 +626,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                                   gudstjenesteDato: gudstjeneste.Dato,
                                 })
                               }
-                              className="px-2 py-1 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md font-semibold flex items-center gap-1 cursor-pointer"
+                              className="px-2.5 py-1 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md text-xs font-semibold flex items-center gap-1 cursor-pointer"
                             >
                               <UserPlus className="w-3 h-3" />
                               <span>Sett opp</span>

@@ -7,20 +7,15 @@ import {
 } from "../services/dataService";
 import { Rolle, SvarStatus } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
+import { RolleIkon } from "./RolleIkon";
 import {
-  Calendar,
-  Clock,
   MapPin,
   CheckCircle2,
-  XCircle,
   Clock3,
-  BookOpen,
   Check,
   X,
   Plus,
   Info,
-  CalendarPlus,
-  Sparkles,
 } from "lucide-react";
 
 interface PersonalViewProps {
@@ -95,6 +90,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
   const [selectedRolleForModal, setSelectedRolleForModal] = useState<Rolle | null>(null);
   const [showDatePickerForRolle, setShowDatePickerForRolle] = useState<Rolle | null>(null);
   const [datePickerFilter, setDatePickerFilter] = useState<"ledige" | "mine" | "alle">("alle");
+  const [visAlleFor, setVisAlleFor] = useState<Record<string, boolean>>({});
   const [actionFeedback, setActionFeedback] = useState<{
     type: "success" | "error";
     message: string;
@@ -285,210 +281,253 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
         </div>
       </div>
 
-      {/* Oppgaver gruppert per rolle */}
-      {visningsRoller.length === 0 ? (
-        <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-2">
-          <Info className="w-8 h-8 text-slate-400 mx-auto" />
-          <h3 className="text-base font-bold text-slate-800">Ingen oppgaver registrert</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Det er foreløpig ikke satt opp noen oppgaver eller tjenestegrupper for {person.Navn}.
-          </p>
-        </div>
-      ) : (
-        visningsRoller.map((rolle) => {
-          // Finn tildelinger for denne spesifikke rollen for personen
-          const tildelingerForRolle = personensTildelinger.filter(
-            (item) => item.rolle?.RolleID === rolle.RolleID
-          );
+      {/* Oppgaver gruppert per gudstjeneste-dato */}
+      {(() => {
+        const iDag = new Date().toISOString().split("T")[0];
+        const kommende = db.gudstjenester
+          .filter((g) => g.Dato >= iDag)
+          .slice()
+          .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`));
 
-          const antallDatoer = tildelingerForRolle.length;
-          const datoBadgeTekst =
-            antallDatoer === 1
-              ? "1 dato"
-              : antallDatoer > 1
-              ? `${antallDatoer} datoer`
-              : "Ingen datoer satt opp";
-
+        if (kommende.length === 0) {
           return (
-            <div key={rolle.RolleID} className="space-y-3">
-              {/* Rolle-tittel og badge på toppen */}
-              <div className="flex items-center justify-between pt-2">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg sm:text-xl font-bold text-[#1e3e2b]">
-                    {rolle.Rollenavn}
-                  </h3>
-                  {rolle.Beskrivelse && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRolleForModal(rolle)}
-                      className="text-xs text-slate-400 hover:text-[#2d5a3f] underline cursor-pointer"
-                      title="Se rollebeskrivelse"
-                    >
-                      (instruks)
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="bg-[#eef5f1] text-[#2d5a3f] border border-[#d2e8d9] text-xs font-semibold px-3 py-1 rounded-full">
-                    {datoBadgeTekst}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => openDatePicker(rolle)}
-                    className="text-xs font-semibold text-[#2d5a3f] hover:text-[#1e3e2b] bg-white hover:bg-[#eef5f1] border border-[#d2e8d9] px-3 py-1 rounded-full transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Velg annen dato</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Kort for hver dato under denne rollen */}
-              {tildelingerForRolle.length === 0 ? (
-                <div className="bg-white rounded-3xl p-6 border border-dashed border-slate-300 text-center space-y-3">
-                  <p className="text-xs text-slate-500">
-                    Du er ikke satt opp på noen forslag for {rolle.Rollenavn} ennå.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => openDatePicker(rolle)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#2d5a3f] hover:bg-[#1e3e2b] text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
-                  >
-                    <CalendarPlus className="w-4 h-4" />
-                    <span>Velg dato for {rolle.Rollenavn}</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {tildelingerForRolle.map((item) => {
-                    const { tildeling, gudstjeneste, status } = item;
-                    if (!gudstjeneste) return null;
-
-                    const isBekreftet = status === "Bekreftet";
-                    const isAvvist = status === "Avvist";
-                    const isVenter = !isBekreftet && !isAvvist;
-
-                    return (
-                      <div
-                        key={tildeling.TildelingID}
-                        className={`bg-white rounded-3xl p-5 sm:p-6 border transition shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                          isBekreftet
-                            ? "border-[#bbf7d0] hover:border-[#86efac]"
-                            : isAvvist
-                            ? "border-rose-200 bg-rose-50/20"
-                            : "border-slate-200 hover:border-slate-300"
-                        }`}
-                      >
-                        {/* Venstre side: Dato og status */}
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Calendar className="w-5 h-5 text-[#2d5a3f]" />
-                            <h4 className="text-base sm:text-lg font-bold text-slate-900">
-                              {gudstjeneste.Dato}
-                            </h4>
-                          </div>
-
-                          <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
-                            <span>{gudstjeneste.Tema || "Gudstjeneste"}</span>
-                            {gudstjeneste.Tid && (
-                              <span className="flex items-center gap-1">
-                                <Clock className="w-3 h-3 text-slate-400" />
-                                <span>{gudstjeneste.Tid}</span>
-                              </span>
-                            )}
-                            {gudstjeneste.Sted && (
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3 h-3 text-slate-400" />
-                                <span>{gudstjeneste.Sted}</span>
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setSelectedRolleForModal(rolle)}
-                              className="text-[#2d5a3f] hover:underline font-semibold cursor-pointer"
-                            >
-                              Se instruks
-                            </button>
-                          </div>
-
-                          {/* Status-merke som i referansebildet */}
-                          <div className="pt-1">
-                            {isBekreftet && (
-                              <span className="inline-flex items-center gap-1.5 bg-[#eef5f1] text-[#1e3e2b] border border-[#bbf7d0] text-xs font-semibold px-3 py-1 rounded-xl">
-                                <Check className="w-3.5 h-3.5 text-[#2d5a3f]" />
-                                <span>Bekreftet – Du stiller til tjeneste!</span>
-                              </span>
-                            )}
-
-                            {isVenter && (
-                              <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold px-3 py-1 rounded-xl">
-                                <Clock3 className="w-3.5 h-3.5 text-amber-600" />
-                                <span>Du er forespurt – bekreft eller meld forfall</span>
-                              </span>
-                            )}
-
-                            {isAvvist && (
-                              <span className="inline-flex items-center gap-1.5 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-semibold px-3 py-1 rounded-xl">
-                                <X className="w-3.5 h-3.5 text-rose-600" />
-                                <span>Kan ikke – Meldt forfall</span>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Høyre side: Handlingsknapper (Dette passer / Kan ikke) */}
-                        <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-center">
-                          {/* Bekreft-knapp */}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleBekreft(
-                                tildeling.TildelingID,
-                                rolle.Rollenavn,
-                                gudstjeneste.Dato
-                              )
-                            }
-                            className={`px-4 py-2 text-xs sm:text-sm font-semibold rounded-2xl border transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
-                              isBekreftet
-                                ? "bg-[#eef5f1] text-[#1e3e2b] border-[#86efac]"
-                                : "bg-white hover:bg-[#eef5f1] text-[#2d5a3f] border-[#bbf7d0] hover:border-[#86efac]"
-                            }`}
-                          >
-                            <Check className="w-4 h-4 text-[#2d5a3f]" />
-                            <span>{isBekreftet ? "Bekreftet" : "Dette passer"}</span>
-                          </button>
-
-                          {/* Avkreft-knapp */}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleAvkreft(
-                                tildeling.TildelingID,
-                                rolle.Rollenavn,
-                                gudstjeneste.Dato,
-                                rolle
-                              )
-                            }
-                            className={`px-4 py-2 text-xs sm:text-sm font-semibold rounded-2xl border transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
-                              isAvvist
-                                ? "bg-rose-100 text-rose-800 border-rose-300"
-                                : "bg-white hover:bg-rose-50 text-rose-700 border-rose-200 hover:border-rose-300"
-                            }`}
-                          >
-                            <X className="w-4 h-4 text-rose-600" />
-                            <span>Kan ikke</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+            <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-2">
+              <Info className="w-8 h-8 text-slate-400 mx-auto" />
+              <h3 className="text-base font-bold text-slate-800">Ingen kommende gudstjenester</h3>
             </div>
           );
-        })
-      )}
+        }
+
+        const personerIRolle = (gudstjenesteId: string, rolleId: string) =>
+          db.tildelinger
+            .filter((t) => t.GudstjenesteID === gudstjenesteId && t.RolleID === rolleId)
+            .map((t) => {
+              const svar = (db.svar.find((s) => s.TildelingID === t.TildelingID)?.Svar ||
+                "Venter") as SvarStatus;
+              if (svar === "Avvist") return null;
+              const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
+              const navn = p?.Fornavn || p?.Navn;
+              if (!navn) return null;
+              return { personId: t.PersonID, navn, status: svar };
+            })
+            .filter(
+              (x): x is { personId: string; navn: string; status: SvarStatus } =>
+                x !== null
+            );
+
+        return (
+          <div className="space-y-4">
+            {visningsRoller.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {visningsRoller.map((rolle) => (
+                  <button
+                    key={rolle.RolleID}
+                    type="button"
+                    onClick={() => openDatePicker(rolle)}
+                    className="text-xs font-semibold text-[#2d5a3f] bg-white hover:bg-[#eef5f1] border border-[#d2e8d9] px-3 py-1.5 rounded-full cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 inline mr-1" />
+                    Velg dato for {rolle.Rollenavn}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {kommende.map((gudstjeneste) => {
+              const mine = personensTildelinger.filter(
+                (item) => item.gudstjeneste?.GudstjenesteID === gudstjeneste.GudstjenesteID
+              );
+              const visAlle = Boolean(visAlleFor[gudstjeneste.GudstjenesteID]);
+              const rollerIOversikt = db.roller.filter((r) => r.Aktiv);
+
+              return (
+                <div
+                  key={gudstjeneste.GudstjenesteID}
+                  className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden"
+                >
+                  <div className="px-5 sm:px-6 pt-5 pb-3">
+                    <span className="text-[11px] font-bold text-[#2d5a3f] uppercase tracking-wider">
+                      {formatDato(gudstjeneste.Dato)}
+                      {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
+                    </span>
+                    <h3 className="text-lg font-bold text-slate-900">
+                      {gudstjeneste.Tema || "Gudstjeneste"}
+                    </h3>
+                    {gudstjeneste.Sted && (
+                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                        <MapPin className="w-3 h-3" />
+                        {gudstjeneste.Sted}
+                      </p>
+                    )}
+                  </div>
+
+                  {mine.length > 0 && (
+                    <div className="px-5 sm:px-6 pb-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                        Mine oppgaver
+                      </p>
+                      {mine.map((item) => {
+                        const isBekreftet = item.status === "Bekreftet";
+                        const isAvvist = item.status === "Avvist";
+                        const isVenter = !isBekreftet && !isAvvist;
+                        return (
+                          <div key={item.tildeling.TildelingID} className="border-b border-slate-100 py-3 last:border-0">
+                            <div className="flex items-center justify-between gap-3 min-h-[1.5rem]">
+                              <span className="inline-flex items-center gap-2.5 min-w-0">
+                                <RolleIkon rollenavn={item.rolle?.Rollenavn || ""} />
+                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  {item.rolle?.Rollenavn}
+                                </span>
+                              </span>
+                              <span className="text-sm font-semibold text-slate-800 text-right inline-flex items-center justify-end gap-1.5 min-h-[1.25rem]">
+                                {isAvvist ? null : (
+                                  <>
+                                    <span
+                                      className={`w-2 h-2 rounded-full shrink-0 ${
+                                        isBekreftet ? "bg-emerald-500" : "bg-amber-400"
+                                      }`}
+                                      title={isBekreftet ? "Bekreftet" : "Forespurt"}
+                                      aria-hidden
+                                    />
+                                    {person.Fornavn || person.Navn}
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBekreft(
+                                    item.tildeling.TildelingID,
+                                    item.rolle!.Rollenavn,
+                                    gudstjeneste.Dato
+                                  )
+                                }
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border cursor-pointer ${
+                                  isBekreftet
+                                    ? "bg-[#eef5f1] text-[#1e3e2b] border-[#86efac]"
+                                    : "bg-white hover:bg-[#eef5f1] text-[#2d5a3f] border-[#bbf7d0]"
+                                }`}
+                              >
+                                {isBekreftet ? "Bekreftet" : "Dette passer"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAvkreft(
+                                    item.tildeling.TildelingID,
+                                    item.rolle!.Rollenavn,
+                                    gudstjeneste.Dato,
+                                    item.rolle!
+                                  )
+                                }
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border cursor-pointer ${
+                                  isAvvist
+                                    ? "bg-rose-100 text-rose-800 border-rose-300"
+                                    : "bg-white hover:bg-rose-50 text-rose-700 border-rose-200"
+                                }`}
+                              >
+                                Kan ikke
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedRolleForModal(item.rolle!)}
+                                className="text-xs text-[#2d5a3f] underline cursor-pointer ml-auto"
+                              >
+                                Instruks
+                              </button>
+                            </div>
+                            {isVenter && (
+                              <p className="text-[11px] text-amber-800 mt-1.5">Du er forespurt</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {mine.length === 0 && (
+                    <p className="px-5 sm:px-6 pb-3 text-xs text-slate-400">
+                      Du er ikke satt opp denne dagen.
+                    </p>
+                  )}
+
+                  <div className="px-5 sm:px-6 pb-4">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVisAlleFor((prev) => ({
+                          ...prev,
+                          [gudstjeneste.GudstjenesteID]: !visAlle,
+                        }))
+                      }
+                      className="text-xs font-semibold text-[#2d5a3f] hover:underline cursor-pointer"
+                    >
+                      {visAlle ? "Skjul alle" : "Vis alle"}
+                    </button>
+
+                    {visAlle && (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-slate-400 mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500" aria-hidden />
+                            Bekreftet
+                          </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-400" aria-hidden />
+                            Forespurt
+                          </span>
+                        </p>
+                        {rollerIOversikt.map((rolle) => {
+                          const personer = personerIRolle(
+                            gudstjeneste.GudstjenesteID,
+                            rolle.RolleID
+                          );
+                          return (
+                            <div
+                              key={rolle.RolleID}
+                              className="flex items-center justify-between gap-3 py-2.5 border-b border-slate-100 last:border-0 min-h-[2.5rem]"
+                            >
+                              <span className="inline-flex items-center gap-2.5 min-w-0">
+                                <RolleIkon rollenavn={rolle.Rollenavn} />
+                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                  {rolle.Rollenavn}
+                                </span>
+                              </span>
+                              <span className="text-sm font-semibold text-slate-800 text-right min-h-[1.25rem] inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                                {personer.map((p) => (
+                                  <span
+                                    key={p.personId}
+                                    className="inline-flex items-center gap-1.5"
+                                  >
+                                    <span
+                                      className={`w-2 h-2 rounded-full shrink-0 ${
+                                        p.status === "Bekreftet"
+                                          ? "bg-emerald-500"
+                                          : "bg-amber-400"
+                                      }`}
+                                      title={
+                                        p.status === "Bekreftet" ? "Bekreftet" : "Forespurt"
+                                      }
+                                      aria-hidden
+                                    />
+                                    {p.navn}
+                                  </span>
+                                ))}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Påmelding: nesten fullskjerm */}
       {showDatePickerForRolle && (
