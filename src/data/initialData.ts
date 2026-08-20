@@ -1,0 +1,807 @@
+/**
+ * Grunndata for Gudstjenesteplanlegger 2.0
+ * Alle tabeller og ID-er følger spesifikasjonen:
+ * P001.. for Personer, GT001.. for Gruppetyper, G001.. for Grupper,
+ * R001.. for Roller, PR001.. for Personroller, GM001.. for Gruppemedlemmer,
+ * TB001.. for Tjenestebehov, T001.. for Tildelinger, S001.. for Svar.
+ */
+
+import {
+  Person,
+  Gruppetype,
+  Gruppe,
+  Gruppemedlem,
+  Rolle,
+  Personrolle,
+  Rollebeskrivelse,
+  Gudstjeneste,
+  Tjenestebehov,
+  Tildeling,
+  Svar,
+  PersonerImport,
+  GudstjenesterImport,
+  RollebeskrivelseImport,
+} from "../types/database";
+
+export const initialGruppetyper: Gruppetype[] = [
+  {
+    GruppetypeID: "GT001",
+    Navn: "Tjenestegruppe",
+    Beskrivelse: "Grupper som har operativt ansvar for bemanning og gjennomføring av konkrete roller på gudstjenester.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppetypeID: "GT002",
+    Navn: "Gruppeledergruppe",
+    Beskrivelse: "Lederforum for alle gruppeledere i menigheten.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppetypeID: "GT003",
+    Navn: "Ledergruppe",
+    Beskrivelse: "Menighetens øverste operative lederteam og stab.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppetypeID: "GT004",
+    Navn: "Husgruppe",
+    Beskrivelse: "Fellesskapsgrupper i hjemmene for bønn, bibel og relasjoner.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppetypeID: "GT005",
+    Navn: "Barnekirke",
+    Beskrivelse: "Organisering av opplegg og aldersinndelte grupper for barn.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+];
+
+export const initialPersoner: Person[] = [
+  {
+    PersonID: "P001",
+    Navn: "Magnar Totland",
+    Fornavn: "Magnar",
+    Etternavn: "Totland",
+    Epost: "magnar.totland@gmail.com",
+    Telefon: "920 12 345",
+    Fødselsår: 1982,
+    Adresse: "Kirkeveien 12",
+    Postnummer: "5000",
+    Poststed: "Bergen",
+    Notat: "Hovedadministrator og gruppeleder for Gudstjenesteledere.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-01",
+    SistEndret: "2026-01-01",
+  },
+  {
+    PersonID: "P002",
+    Navn: "Ingrid Hansen",
+    Fornavn: "Ingrid",
+    Etternavn: "Hansen",
+    Epost: "ingrid.hansen@example.com",
+    Telefon: "911 22 334",
+    Fødselsår: 1988,
+    Adresse: "Parkveien 4",
+    Postnummer: "5003",
+    Poststed: "Bergen",
+    Notat: "Leder for Lovsangsgruppen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-02",
+    SistEndret: "2026-01-02",
+  },
+  {
+    PersonID: "P003",
+    Navn: "Jonas Berg",
+    Fornavn: "Jonas",
+    Etternavn: "Berg",
+    Epost: "jonas.berg@example.com",
+    Telefon: "988 77 665",
+    Fødselsår: 1994,
+    Adresse: "Fjellgaten 18",
+    Postnummer: "5014",
+    Poststed: "Bergen",
+    Notat: "Leder for Teknikk & Lyd.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-02",
+    SistEndret: "2026-01-02",
+  },
+  {
+    PersonID: "P004",
+    Navn: "Silje Kristin Solberg",
+    Fornavn: "Silje Kristin",
+    Etternavn: "Solberg",
+    Epost: "silje.solberg@example.com",
+    Telefon: "412 33 445",
+    Fødselsår: 1990,
+    Adresse: "Solkroken 7",
+    Postnummer: "5018",
+    Poststed: "Bergen",
+    Notat: "Leder for Barnekirken.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-03",
+    SistEndret: "2026-01-03",
+  },
+  {
+    PersonID: "P005",
+    Navn: "Eirik Dahl",
+    Fornavn: "Eirik",
+    Etternavn: "Dahl",
+    Epost: "eirik.dahl@example.com",
+    Telefon: "905 44 321",
+    Fødselsår: 1979,
+    Adresse: "Vestre Torv 2",
+    Postnummer: "5005",
+    Poststed: "Bergen",
+    Notat: "Leder for Møteverter og Rigging.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-03",
+    SistEndret: "2026-01-03",
+  },
+  {
+    PersonID: "P006",
+    Navn: "Marit Vik",
+    Fornavn: "Marit",
+    Etternavn: "Vik",
+    Epost: "marit.vik@example.com",
+    Telefon: "934 56 789",
+    Fødselsår: 1975,
+    Adresse: "Kvalvikveien 9",
+    Postnummer: "5012",
+    Poststed: "Bergen",
+    Notat: "Leder for Forbønnsteam og Kjøkkentjeneste.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-04",
+    SistEndret: "2026-01-04",
+  },
+  {
+    PersonID: "P007",
+    Navn: "Andreas Lund",
+    Fornavn: "Andreas",
+    Etternavn: "Lund",
+    Epost: "andreas.lund@example.com",
+    Telefon: "976 54 321",
+    Fødselsår: 1985,
+    Adresse: "Nordnesbakken 15",
+    Postnummer: "5005",
+    Poststed: "Bergen",
+    Notat: "Erfaren taler og møteleder.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-04",
+    SistEndret: "2026-01-04",
+  },
+  {
+    PersonID: "P008",
+    Navn: "Camilla Nilsen",
+    Fornavn: "Camilla",
+    Etternavn: "Nilsen",
+    Epost: "camilla.nilsen@example.com",
+    Telefon: "481 23 990",
+    Fødselsår: 1996,
+    Adresse: "Skottegaten 23",
+    Postnummer: "5011",
+    Poststed: "Bergen",
+    Notat: "Sanger i lovsangsteam og barnekirkeleder.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-05",
+    SistEndret: "2026-01-05",
+  },
+  {
+    PersonID: "P009",
+    Navn: "Henrik Olsen",
+    Fornavn: "Henrik",
+    Etternavn: "Olsen",
+    Epost: "henrik.olsen@example.com",
+    Telefon: "928 33 112",
+    Fødselsår: 1999,
+    Adresse: "Sandviksveien 45",
+    Postnummer: "5035",
+    Poststed: "Bergen",
+    Notat: "Lydtekniker og bildekjører.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-05",
+    SistEndret: "2026-01-05",
+  },
+  {
+    PersonID: "P010",
+    Navn: "Gunnar Fjell",
+    Fornavn: "Gunnar",
+    Etternavn: "Fjell",
+    Epost: "gunnar.fjell@example.com",
+    Telefon: "951 88 443",
+    Fødselsår: 1968,
+    Adresse: "Fantoftvegen 11",
+    Postnummer: "5075",
+    Poststed: "Bergen",
+    Notat: "Forbønner og møtevert.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-06",
+    SistEndret: "2026-01-06",
+  },
+  {
+    PersonID: "P011",
+    Navn: "Astrid Moen",
+    Fornavn: "Astrid",
+    Etternavn: "Moen",
+    Epost: "astrid.moen@example.com",
+    Telefon: "450 11 223",
+    Fødselsår: 1972,
+    Adresse: "Løvstakkveien 8",
+    Postnummer: "5056",
+    Poststed: "Bergen",
+    Notat: "Forbønnsteam og baking.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-06",
+    SistEndret: "2026-01-06",
+  },
+  {
+    PersonID: "P012",
+    Navn: "Thomas Breivik",
+    Fornavn: "Thomas",
+    Etternavn: "Breivik",
+    Epost: "thomas.breivik@example.com",
+    Telefon: "930 44 882",
+    Fødselsår: 1991,
+    Adresse: "Damsgårdsveien 80",
+    Postnummer: "5058",
+    Poststed: "Bergen",
+    Notat: "Rigging og vertskap.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-07",
+    SistEndret: "2026-01-07",
+  },
+  {
+    PersonID: "P013",
+    Navn: "Kari Strand",
+    Fornavn: "Kari",
+    Etternavn: "Strand",
+    Epost: "kari.strand@example.com",
+    Telefon: "917 65 432",
+    Fødselsår: 1983,
+    Adresse: "Nesttunhaugene 14",
+    Postnummer: "5221",
+    Poststed: "Nesttun",
+    Notat: "Kjøkken og kakebaking.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-07",
+    SistEndret: "2026-01-07",
+  },
+  {
+    PersonID: "P014",
+    Navn: "Olav Hauge",
+    Fornavn: "Olav",
+    Etternavn: "Hauge",
+    Epost: "olav.hauge@example.com",
+    Telefon: "902 34 567",
+    Fødselsår: 1986,
+    Adresse: "Hjellestadvegen 5",
+    Postnummer: "5258",
+    Poststed: "Blomsterdalen",
+    Notat: "Gitarist og lovsangleder.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-08",
+    SistEndret: "2026-01-08",
+  },
+];
+
+export const initialGrupper: Gruppe[] = [
+  {
+    GruppeID: "G001",
+    Gruppenavn: "Gudstjenesteleder",
+    GruppetypeID: "GT001",
+    GruppelederID: "P001",
+    NestlederID: "P007",
+    Beskrivelse: "Ansvarlig for møteledere og talere ved gudstjenestene.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G002",
+    Gruppenavn: "Lovsang",
+    GruppetypeID: "GT001",
+    GruppelederID: "P002",
+    NestlederID: "P014",
+    Beskrivelse: "Lovsangledere, musikere og sangere.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G003",
+    Gruppenavn: "Teknikk (Lyd & Bilde)",
+    GruppetypeID: "GT001",
+    GruppelederID: "P003",
+    NestlederID: "P009",
+    Beskrivelse: "Styring av PA/lydmikser, lys og bildepresentasjon.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G004",
+    Gruppenavn: "Barnekirke",
+    GruppetypeID: "GT001",
+    GruppelederID: "P004",
+    NestlederID: "P008",
+    Beskrivelse: "Undervisning, lek og omsorg for barna under talen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G005",
+    Gruppenavn: "Møtevert & Rigging",
+    GruppetypeID: "GT001",
+    GruppelederID: "P005",
+    NestlederID: "P012",
+    Beskrivelse: "Velkomst i døren, utdeling av program, opprigg og nedrigg.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G006",
+    Gruppenavn: "Kjøkken & Kirkekaffe",
+    GruppetypeID: "GT001",
+    GruppelederID: "P006",
+    NestlederID: "P013",
+    Beskrivelse: "Kaffekoking, tilrettelegging av kaker og opprydding etter møtet.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    GruppeID: "G007",
+    Gruppenavn: "Forbønn",
+    GruppetypeID: "GT001",
+    GruppelederID: "P006",
+    NestlederID: "P010",
+    Beskrivelse: "Tjeneste med forbønn og personlig samtale under og etter møtet.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+];
+
+export const initialGruppemedlemmer: Gruppemedlem[] = [
+  { GruppeMedlemID: "GM001", GruppeID: "G001", PersonID: "P001", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM002", GruppeID: "G001", PersonID: "P007", Medlemsrolle: "Medlem", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM003", GruppeID: "G002", PersonID: "P002", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM004", GruppeID: "G002", PersonID: "P008", Medlemsrolle: "Sanger", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM005", GruppeID: "G002", PersonID: "P014", Medlemsrolle: "Gitarist", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM006", GruppeID: "G003", PersonID: "P003", Medlemsrolle: "Leder / Lyd", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM007", GruppeID: "G003", PersonID: "P009", Medlemsrolle: "Lyd / Bilde", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM008", GruppeID: "G004", PersonID: "P004", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM009", GruppeID: "G004", PersonID: "P008", Medlemsrolle: "Medleder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM010", GruppeID: "G005", PersonID: "P005", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM011", GruppeID: "G005", PersonID: "P012", Medlemsrolle: "Riggeansvarlig", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM012", GruppeID: "G006", PersonID: "P006", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM013", GruppeID: "G006", PersonID: "P013", Medlemsrolle: "Kjøkkenvert", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM014", GruppeID: "G006", PersonID: "P011", Medlemsrolle: "Bakeansvarlig", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM015", GruppeID: "G007", PersonID: "P006", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM016", GruppeID: "G007", PersonID: "P010", Medlemsrolle: "Forbønner", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM017", GruppeID: "G007", PersonID: "P011", Medlemsrolle: "Forbønner", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+];
+
+export const initialRoller: Rolle[] = [
+  {
+    RolleID: "R001",
+    Rollenavn: "Møteleder",
+    Beskrivelse: "Leder gudstjenesten gjennom programmet, ønsker velkommen og binder elementene sammen.",
+    Aktiv: true,
+    Behov: 1,
+    GruppeID: "G001",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R002",
+    Rollenavn: "Taler",
+    Beskrivelse: "Ansvarlig for dagens preken og bibelundervisning.",
+    Aktiv: true,
+    Behov: 1,
+    GruppeID: "G001",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R003",
+    Rollenavn: "Forbønn",
+    Beskrivelse: "Står til rådighet for forbønn og personlig samtale under nattverd og etter møtet.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G007",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R004",
+    Rollenavn: "Barnekirke",
+    Beskrivelse: "Leder samling og aktiviteter for barna under gudstjenesten.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G004",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R005",
+    Rollenavn: "Lovsang",
+    Beskrivelse: "Leder menighetens sang og tilbedelse.",
+    Aktiv: true,
+    Behov: 3,
+    GruppeID: "G002",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R006",
+    Rollenavn: "Lyd",
+    Beskrivelse: "Kjører lydmikser og sikrer god lyd i sal og opptak.",
+    Aktiv: true,
+    Behov: 1,
+    GruppeID: "G003",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R007",
+    Rollenavn: "Bilde",
+    Beskrivelse: "Styrer presentasjon av sangtekster, bibelvers og grafikk på storskjerm.",
+    Aktiv: true,
+    Behov: 1,
+    GruppeID: "G003",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R008",
+    Rollenavn: "Møtevert",
+    Beskrivelse: "Ønsker velkommen ved inngangsdøren, deler ut program og svarer på spørsmål.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G005",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R009",
+    Rollenavn: "Rigging",
+    Beskrivelse: "Klargjør lokalet, stoler, scene og rydder etter gudstjenesten.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G005",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R010",
+    Rollenavn: "Kjøkken",
+    Beskrivelse: "Koker kaffe, setter frem mat og tar oppvasken på kirkekaffen.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G006",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R011",
+    Rollenavn: "Baking",
+    Beskrivelse: "Baker kake eller boller til kirkekaffen og leverer før gudstjenesten.",
+    Aktiv: true,
+    Behov: 2,
+    GruppeID: "G006",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R012",
+    Rollenavn: "Kollekt",
+    Beskrivelse: "Håndterer kollekten og opptelling.",
+    Aktiv: true,
+    Behov: 1,
+    GruppeID: "G001",
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+];
+
+export const initialPersonroller: Personrolle[] = [
+  // Magnar Totland
+  { PersonRolleID: "PR001", PersonID: "P001", RolleID: "R001", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR002", PersonID: "P001", RolleID: "R002", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR003", PersonID: "P001", RolleID: "R008", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  
+  // Ingrid Hansen
+  { PersonRolleID: "PR004", PersonID: "P002", RolleID: "R005", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR005", PersonID: "P002", RolleID: "R001", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Jonas Berg
+  { PersonRolleID: "PR006", PersonID: "P003", RolleID: "R006", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR007", PersonID: "P003", RolleID: "R007", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Silje Kristin Solberg
+  { PersonRolleID: "PR008", PersonID: "P004", RolleID: "R004", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR009", PersonID: "P004", RolleID: "R008", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Eirik Dahl
+  { PersonRolleID: "PR010", PersonID: "P005", RolleID: "R008", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR011", PersonID: "P005", RolleID: "R009", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR012", PersonID: "P005", RolleID: "R012", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Marit Vik
+  { PersonRolleID: "PR013", PersonID: "P006", RolleID: "R003", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR014", PersonID: "P006", RolleID: "R010", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR015", PersonID: "P006", RolleID: "R011", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Andreas Lund
+  { PersonRolleID: "PR016", PersonID: "P007", RolleID: "R001", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR017", PersonID: "P007", RolleID: "R002", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Camilla Nilsen
+  { PersonRolleID: "PR018", PersonID: "P008", RolleID: "R005", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR019", PersonID: "P008", RolleID: "R004", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Henrik Olsen
+  { PersonRolleID: "PR020", PersonID: "P009", RolleID: "R006", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR021", PersonID: "P009", RolleID: "R007", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Gunnar Fjell
+  { PersonRolleID: "PR022", PersonID: "P010", RolleID: "R003", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR023", PersonID: "P010", RolleID: "R008", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Astrid Moen
+  { PersonRolleID: "PR024", PersonID: "P011", RolleID: "R003", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR025", PersonID: "P011", RolleID: "R011", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Thomas Breivik
+  { PersonRolleID: "PR026", PersonID: "P012", RolleID: "R008", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR027", PersonID: "P012", RolleID: "R009", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Kari Strand
+  { PersonRolleID: "PR028", PersonID: "P013", RolleID: "R010", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { PersonRolleID: "PR029", PersonID: "P013", RolleID: "R011", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+
+  // Olav Hauge
+  { PersonRolleID: "PR030", PersonID: "P014", RolleID: "R005", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+];
+
+export const initialRollebeskrivelser: Rollebeskrivelse[] = [
+  {
+    RolleID: "R001",
+    Rollebeskrivelse: "Møteleder har hovedansvar for helheten i gudstjenesten. Møt opp 45 minutter før start. Gå gjennom kjøreplanen med taler, lovsangleder og tekniker. Ønsk velkommen, led overganger og bønnestunder, og avslutt med velsignelsen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R002",
+    Rollebeskrivelse: "Taler forbereder preken ut fra dagens tema og bibeltekster. Lengde ca. 25-30 minutter. Send gjerne slides til bildekjører senest fredag kveld.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R003",
+    Rollebeskrivelse: "Forbønnsteamet står tilgjengelig under nattverd og etter gudstjenesten. Vær to og to sammen. Ha taushetsplikt og vis omsorg og respekt for den som søker forbønn.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R004",
+    Rollebeskrivelse: "Barnekirkeledere samles 30 min før for å klargjøre rom og materiell. Barna følges ut etter barneinnslaget i storsalen. Opplegget inneholder sang, bibelfortelling og aktivitet/lek.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R005",
+    Rollebeskrivelse: "Lovsangsteamet har lydprøve kl. 09:30. Forbered 4-6 sanger i samråd med møteleder og dagens tema. Ha fokus på å lede forsamlingen inn i tilbedelse.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R006",
+    Rollebeskrivelse: "Lydtekniker møter kl. 09:00. Skru på systemet, sjekk mikrofonbatterier, kjør lydprøve med lovsangsteam og taler. Gjør opptak av prekenen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R007",
+    Rollebeskrivelse: "Bildekjører møter kl. 09:45. Klargjør presentasjonsprogram med dagens sangtekster, bibelvers, kunngjøringer og talerens slides.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R008",
+    Rollebeskrivelse: "Møteverter møter kl. 10:15. Vær smilende i inngangen, del ut program, hjelp folk med sitteplasser og tell antall oppmøtte under prekenen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R009",
+    Rollebeskrivelse: "Riggeteam møter kl. 09:15. Sett opp stoler, klargjør nattverdbord og foajé. Etter gudstjenesten stables stoler og lokalet ryddes.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R010",
+    Rollebeskrivelse: "Kjøkkenteam møter kl. 10:00. Trakt kaffe og te, skjær opp kaker, sett frem kopper og saft. Rydd og vask opp etter kirkekaffen.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R011",
+    Rollebeskrivelse: "Baking: Bak en kake eller 15-20 boller/muffins. Leveres på kjøkkenet før gudstjenesten starter kl. 11:00.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+  {
+    RolleID: "R012",
+    Rollebeskrivelse: "Kollektansvarlig tar imot Vipps-oversikt og kontantkollekt, teller opp sammen med en annen person og signerer opptellingsprotokoll.",
+    Aktiv: true,
+    OpprettetDato: "2026-01-10",
+    SistEndret: "2026-01-10",
+  },
+];
+
+export const initialGudstjenester: Gudstjeneste[] = [
+  {
+    GudstjenesteID: "GUD001",
+    Dato: "2026-08-23",
+    Tid: "11:00",
+    Sted: "Hovedsalen, Sentrumskirken",
+    Tema: "Fellesskap og disippelskap",
+    Bibeltekst: "Apostlenes gjerninger 2:42-47",
+    Kollekt: "Menighetens barne- og ungdomsarbeid (Vipps #12345)",
+    Merknad: "Oppstart etter sommeren. Familievennlig gudstjeneste med kirkekaffe.",
+  },
+  {
+    GudstjenesteID: "GUD002",
+    Dato: "2026-08-30",
+    Tid: "11:00",
+    Sted: "Hovedsalen, Sentrumskirken",
+    Tema: "Bønn som forandrer",
+    Bibeltekst: "Matteus 6:5-15",
+    Kollekt: "Misjonsprosjekt i Nepal",
+    Merknad: "Nattverd og utvidet forbønnstjeneste.",
+  },
+  {
+    GudstjenesteID: "GUD003",
+    Dato: "2026-09-06",
+    Tid: "11:00",
+    Sted: "Hovedsalen, Sentrumskirken",
+    Tema: "Nåde i hverdagen",
+    Bibeltekst: "Efeserne 2:1-10",
+    Kollekt: "Menighetens driftsfond",
+    Merknad: "Utdeling av 6-årsbøker i barnekirken.",
+  },
+  {
+    GudstjenesteID: "GUD004",
+    Dato: "2026-09-13",
+    Tid: "11:00",
+    Sted: "Hovedsalen, Sentrumskirken",
+    Tema: "Sendt ut i verden",
+    Bibeltekst: "Johannes 20:19-23",
+    Kollekt: "Kirkens Bymisjon",
+    Merknad: "Lovsangsfokus og vitnesbyrd.",
+  },
+  {
+    GudstjenesteID: "GUD005",
+    Dato: "2026-09-20",
+    Tid: "11:00",
+    Sted: "Hovedsalen, Sentrumskirken",
+    Tema: "Tro under prøvelser",
+    Bibeltekst: "Jakobs brev 1:2-12",
+    Kollekt: "Åpne Dører",
+    Merknad: "Nattverdgudstjeneste.",
+  },
+];
+
+// Tjenestebehov som overstyrer standardbehov på konkrete gudstjenester
+export const initialTjenestebehov: Tjenestebehov[] = [
+  // Eksempel: GUD002 har utvidet forbønn -> Behov overstyrt til 3 (standard er 2)
+  {
+    TjenestebehovID: "TB001",
+    GudstjenesteID: "GUD002",
+    RolleID: "R003", // Forbønn
+    Antall: 3,
+    Aktiv: true,
+    Notat: "Utvidet forbønn etter nattverd.",
+    OpprettetDato: "2026-01-12",
+    SistEndret: "2026-01-12",
+  },
+  // Eksempel: GUD001 har oppstartsfest -> Kjøkken overstyrt til 3
+  {
+    TjenestebehovID: "TB002",
+    GudstjenesteID: "GUD001",
+    RolleID: "R010", // Kjøkken
+    Antall: 3,
+    Aktiv: true,
+    Notat: "Ekstra kaffeservering og kakebord ved semesteroppstart.",
+    OpprettetDato: "2026-01-12",
+    SistEndret: "2026-01-12",
+  },
+];
+
+export const initialTildelinger: Tildeling[] = [
+  // Gudstjeneste GUD001 (23. august 2026)
+  { TildelingID: "T001", GudstjenesteID: "GUD001", RolleID: "R001", PersonID: "P001", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Magnar Møteleder
+  { TildelingID: "T002", GudstjenesteID: "GUD001", RolleID: "R002", PersonID: "P007", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Andreas Taler
+  { TildelingID: "T003", GudstjenesteID: "GUD001", RolleID: "R005", PersonID: "P002", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Ingrid Lovsang
+  { TildelingID: "T004", GudstjenesteID: "GUD001", RolleID: "R005", PersonID: "P008", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Camilla Lovsang
+  { TildelingID: "T005", GudstjenesteID: "GUD001", RolleID: "R006", PersonID: "P003", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Jonas Lyd
+  { TildelingID: "T006", GudstjenesteID: "GUD001", RolleID: "R007", PersonID: "P009", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Henrik Bilde
+  { TildelingID: "T007", GudstjenesteID: "GUD001", RolleID: "R004", PersonID: "P004", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Silje Barnekirke
+  { TildelingID: "T008", GudstjenesteID: "GUD001", RolleID: "R008", PersonID: "P005", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Eirik Møtevert
+  { TildelingID: "T009", GudstjenesteID: "GUD001", RolleID: "R010", PersonID: "P006", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Marit Kjøkken
+  { TildelingID: "T010", GudstjenesteID: "GUD001", RolleID: "R010", PersonID: "P013", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Kari Kjøkken
+  { TildelingID: "T011", GudstjenesteID: "GUD001", RolleID: "R011", PersonID: "P011", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Astrid Baking
+
+  // Gudstjeneste GUD002 (30. august 2026)
+  { TildelingID: "T012", GudstjenesteID: "GUD002", RolleID: "R001", PersonID: "P007", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Andreas Møteleder
+  { TildelingID: "T013", GudstjenesteID: "GUD002", RolleID: "R002", PersonID: "P001", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Magnar Taler
+  { TildelingID: "T014", GudstjenesteID: "GUD002", RolleID: "R003", PersonID: "P010", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Gunnar Forbønn
+  { TildelingID: "T015", GudstjenesteID: "GUD002", RolleID: "R003", PersonID: "P011", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Astrid Forbønn
+  { TildelingID: "T016", GudstjenesteID: "GUD002", RolleID: "R006", PersonID: "P009", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Henrik Lyd
+  { TildelingID: "T017", GudstjenesteID: "GUD002", RolleID: "R009", PersonID: "P012", OpprettetDato: "2026-01-15", SistEndret: "2026-01-15" }, // Thomas Rigging
+];
+
+export const initialSvar: Svar[] = [
+  { SvarID: "S001", TildelingID: "T001", PersonID: "P001", Svar: "Bekreftet", Kommentar: "Gleder meg til oppstart!", SvartDato: "2026-01-16" },
+  { SvarID: "S002", TildelingID: "T002", PersonID: "P007", Svar: "Bekreftet", Kommentar: "Talen er nesten klar.", SvartDato: "2026-01-16" },
+  { SvarID: "S003", TildelingID: "T003", PersonID: "P002", Svar: "Bekreftet", SvartDato: "2026-01-17" },
+  { SvarID: "S004", TildelingID: "T004", PersonID: "P008", Svar: "Venter", SvartDato: "" },
+  { SvarID: "S005", TildelingID: "T005", PersonID: "P003", Svar: "Bekreftet", SvartDato: "2026-01-17" },
+  { SvarID: "S006", TildelingID: "T006", PersonID: "P009", Svar: "Bekreftet", SvartDato: "2026-01-18" },
+  { SvarID: "S007", TildelingID: "T007", PersonID: "P004", Svar: "Bekreftet", SvartDato: "2026-01-18" },
+  { SvarID: "S008", TildelingID: "T008", PersonID: "P005", Svar: "Venter", SvartDato: "" },
+  { SvarID: "S009", TildelingID: "T009", PersonID: "P006", Svar: "Bekreftet", SvartDato: "2026-01-19" },
+  { SvarID: "S010", TildelingID: "T010", PersonID: "P013", Svar: "Bekreftet", SvartDato: "2026-01-19" },
+  { SvarID: "S011", TildelingID: "T011", PersonID: "P011", Svar: "Bekreftet", Kommentar: "Tar med eplekake.", SvartDato: "2026-01-20" },
+
+  { SvarID: "S012", TildelingID: "T012", PersonID: "P007", Svar: "Bekreftet", SvartDato: "2026-01-20" },
+  { SvarID: "S013", TildelingID: "T013", PersonID: "P001", Svar: "Bekreftet", SvartDato: "2026-01-20" },
+  { SvarID: "S014", TildelingID: "T014", PersonID: "P010", Svar: "Bekreftet", SvartDato: "2026-01-21" },
+  { SvarID: "S015", TildelingID: "T015", PersonID: "P011", Svar: "Venter", SvartDato: "" },
+  { SvarID: "S016", TildelingID: "T016", PersonID: "P009", Svar: "Bekreftet", SvartDato: "2026-01-21" },
+  { SvarID: "S017", TildelingID: "T017", PersonID: "P012", Svar: "Bekreftet", SvartDato: "2026-01-22" },
+];
+
+// Historiske import-kildedata som beholdes urørt for migrering/innsyn
+export const initialPersonerImport: PersonerImport[] = [
+  { PersonID: "P001", Navn: "Magnar Totland", Epost: "magnar.totland@gmail.com", Telefon: "920 12 345", Tjenesteområde1: "Gudstjenesteleder", Tjenesteområde2: "Taler", Tjenesteområde3: "Møtevert", Aktiv: true },
+  { PersonID: "P002", Navn: "Ingrid Hansen", Epost: "ingrid.hansen@example.com", Telefon: "911 22 334", Tjenesteområde1: "Lovsang", Tjenesteområde2: "Møteleder", Aktiv: true },
+  { PersonID: "P003", Navn: "Jonas Berg", Epost: "jonas.berg@example.com", Telefon: "988 77 665", Tjenesteområde1: "Lyd", Tjenesteområde2: "Bilde", Aktiv: true },
+  { PersonID: "P004", Navn: "Silje Kristin Solberg", Epost: "silje.solberg@example.com", Telefon: "412 33 445", Tjenesteområde1: "Barnekirke", Tjenesteområde2: "Møtevert", Aktiv: true },
+  { PersonID: "P005", Navn: "Eirik Dahl", Epost: "eirik.dahl@example.com", Telefon: "905 44 321", Tjenesteområde1: "Møtevert", Tjenesteområde2: "Rigging", Tjenesteområde3: "Kollekt", Aktiv: true },
+  { PersonID: "P006", Navn: "Marit Vik", Epost: "marit.vik@example.com", Telefon: "934 56 789", Tjenesteområde1: "Forbønn", Tjenesteområde2: "Kjøkken", Tjenesteområde3: "Baking", Aktiv: true },
+];
+
+export const initialGudstjenesterImport: GudstjenesterImport[] = [
+  { GudstjenesteID: "GUD001", Dato: "2026-08-23", Tid: "11:00", Tema: "Fellesskap og disippelskap", MøtelederGammel: "Magnar Totland", TalerGammel: "Andreas Lund", LovsangGammel: "Ingrid Hansen", LydGammel: "Jonas Berg", VertGammel: "Eirik Dahl" },
+  { GudstjenesteID: "GUD002", Dato: "2026-08-30", Tid: "11:00", Tema: "Bønn som forandrer", MøtelederGammel: "Andreas Lund", TalerGammel: "Magnar Totland", LovsangGammel: "Olav Hauge", LydGammel: "Henrik Olsen", VertGammel: "Thomas Breivik" },
+];
+
+export const initialRollebeskrivelseImport: RollebeskrivelseImport[] = [
+  { RolleID: "R001", Rollenavn: "Møteleder", FullBeskrivelse: "Møteleder har hovedansvar for helheten i gudstjenesten.", SjekklisteGammel: "Møt 45 min før; Sjekk kjøreplan; Ønsk velkommen; Be for møtet; Avslutt med velsignelsen" },
+  { RolleID: "R005", Rollenavn: "Lovsang", FullBeskrivelse: "Lovsangsteamet leder menighetens sang og tilbedelse.", SjekklisteGammel: "Lydprøve kl 09:30; 4-6 sanger; Samarbeid med møteleder" },
+];
