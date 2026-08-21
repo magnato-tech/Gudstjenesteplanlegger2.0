@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { loadDatabase, resetDatabase, DatabaseState, hentTilgang, visningErTillatt, AppView } from "./services/dataService";
+import { loadDatabase, loadLocalDatabase, resetDatabase, DatabaseState, hentTilgang, visningErTillatt, AppView } from "./services/dataService";
 import { Header } from "./components/Header";
 import { PersonalView } from "./components/PersonalView";
 import { GroupLeaderView } from "./components/GroupLeaderView";
 import { AdminView } from "./components/AdminView";
 
 export default function App() {
-  const [db, setDb] = useState<DatabaseState | null>(null);
+  // Start umiddelbart med lokal/initial database så skjermen rendres momentant
+  const [db, setDb] = useState<DatabaseState>(() => loadLocalDatabase());
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("personal");
   const [selectedPersonId, setSelectedPersonId] = useState<string>("P001");

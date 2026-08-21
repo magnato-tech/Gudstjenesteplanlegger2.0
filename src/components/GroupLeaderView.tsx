@@ -15,7 +15,6 @@ import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { RolleIkon } from "./RolleIkon";
 import {
   GroupLeaderGuide,
-  GRUPPELEDER_VEILEDNING_KEY,
 } from "./GroupLeaderGuide";
 import {
   Users,
@@ -77,21 +76,10 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
   const [valgtMenighetsmedlem, setValgtMenighetsmedlem] = useState<Person | null>(null);
   const [redigerMin, setRedigerMin] = useState<string | null>(null);
   const [oversiktFilter, setOversiktFilter] = useState<OversiktFilter>(null);
-  const [guideOpen, setGuideOpen] = useState(() => {
-    try {
-      return localStorage.getItem(GRUPPELEDER_VEILEDNING_KEY) !== "1";
-    } catch {
-      return false;
-    }
-  });
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const lukkVeiledning = () => {
     setGuideOpen(false);
-    try {
-      localStorage.setItem(GRUPPELEDER_VEILEDNING_KEY, "1");
-    } catch {
-      /* ignore */
-    }
   };
 
   const person = db.personer.find((p) => p.PersonID === selectedPersonId);
@@ -103,9 +91,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
 
   // Alle gruppeledere i systemet for raskt bytte dersom valgt person ikke er leder
   const alleGruppeledere = db.personer.filter((p) =>
-    db.grupper.some(
-      (g) => g.Aktiv && (g.GruppelederID === p.PersonID || g.NestlederID === p.PersonID)
-    )
+    finnGrupperForGruppeleder(db, p.PersonID).length > 0
   );
 
   const [activeGruppeId, setActiveGruppeId] = useState<string>(

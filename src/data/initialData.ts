@@ -238,7 +238,7 @@ export const initialPersoner: Person[] = [
     Adresse: "Løvstakkveien 8",
     Postnummer: "5056",
     Poststed: "Bergen",
-    Notat: "Forbønnsteam og baking.",
+    Notat: "Gruppeleder for Forbønnsteam og aktiv på baking.",
     Aktiv: true,
     OpprettetDato: "2026-01-06",
     SistEndret: "2026-01-06",
@@ -364,7 +364,7 @@ export const initialGrupper: Gruppe[] = [
     GruppeID: "G007",
     Gruppenavn: "Forbønn",
     GruppetypeID: "GT001",
-    GruppelederID: "P006",
+    GruppelederID: "P011",
     NestlederID: "P010",
     Beskrivelse: "Tjeneste med forbønn og personlig samtale under og etter møtet.",
     Aktiv: true,
@@ -388,9 +388,8 @@ export const initialGruppemedlemmer: Gruppemedlem[] = [
   { GruppeMedlemID: "GM012", GruppeID: "G006", PersonID: "P006", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
   { GruppeMedlemID: "GM013", GruppeID: "G006", PersonID: "P013", Medlemsrolle: "Kjøkkenvert", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
   { GruppeMedlemID: "GM014", GruppeID: "G006", PersonID: "P011", Medlemsrolle: "Bakeansvarlig", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
-  { GruppeMedlemID: "GM015", GruppeID: "G007", PersonID: "P006", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
-  { GruppeMedlemID: "GM016", GruppeID: "G007", PersonID: "P010", Medlemsrolle: "Forbønner", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
-  { GruppeMedlemID: "GM017", GruppeID: "G007", PersonID: "P011", Medlemsrolle: "Forbønner", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM016", GruppeID: "G007", PersonID: "P010", Medlemsrolle: "Nestleder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
+  { GruppeMedlemID: "GM017", GruppeID: "G007", PersonID: "P011", Medlemsrolle: "Leder", Aktiv: true, OpprettetDato: "2026-01-10", SistEndret: "2026-01-10" },
 ];
 
 export const initialRoller: Rolle[] = [

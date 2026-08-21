@@ -8,6 +8,8 @@ import {
   genererPersonligLenke,
   opprettPersonIRegister,
   saveDatabase,
+  hentTilgang,
+  AppView,
 } from "../services/dataService";
 import {
   Rolle,
@@ -83,6 +85,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [editingGruppeId, setEditingGruppeId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedGroupFilter, setSelectedGroupFilter] = useState("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | "leaders" | "admins" | "members">("all");
   const [copiedPersonId, setCopiedPersonId] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedRolleForModal, setSelectedRolleForModal] = useState<Rolle | null>(null);
@@ -131,10 +134,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setNewPersonModal(true);
   };
 
-  const handleCopyLink = (personId: string) => {
-    const link = genererPersonligLenke(personId);
+  const handleCopyLink = (personId: string, view?: AppView) => {
+    const link = genererPersonligLenke(personId, view);
     navigator.clipboard.writeText(link).then(() => {
-      setCopiedPersonId(personId);
+      const key = view ? `${personId}-${view}` : personId;
+      setCopiedPersonId(key);
       setTimeout(() => setCopiedPersonId(null), 2500);
     });
   };
@@ -348,6 +352,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
         (t) => t.gruppe.GruppeID === selectedGroupFilter
       );
       if (!tilknyttet) return false;
+    }
+
+    if (roleFilter !== "all") {
+      const tilgang = hentTilgang(db, p.PersonID);
+      if (roleFilter === "leaders" && !tilgang.isLeader) return false;
+      if (roleFilter === "admins" && !tilgang.isAdmin) return false;
+      if (roleFilter === "members" && (tilgang.isLeader || tilgang.isAdmin)) return false;
     }
 
     return true;
@@ -736,7 +747,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
           </div>
 
           {/* Søk og filter */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-white p-3.5 rounded-2xl border border-slate-200">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white p-3.5 rounded-2xl border border-slate-200">
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               <input
@@ -755,12 +766,26 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 onChange={(e) => setSelectedGroupFilter(e.target.value)}
                 className="w-full text-xs border border-slate-200 rounded-xl p-2 bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
               >
-                <option value="all">Alle tjenestegrupper</option>
+                <option value="all">Alle grupper</option>
                 {db.grupper.map((g) => (
                   <option key={g.GruppeID} value={g.GruppeID}>
                     {g.Gruppenavn}
                   </option>
                 ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-slate-400 shrink-0" />
+              <select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value as any)}
+                className="w-full text-xs border border-slate-200 rounded-xl p-2 bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+              >
+                <option value="all">Alle tilganger / roller</option>
+                <option value="leaders">Kun tjenestegruppeledere</option>
+                <option value="admins">Kun administratorer</option>
+                <option value="members">Kun ordinære medlemmer</option>
               </select>
             </div>
           </div>
@@ -773,14 +798,19 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   <th className="p-3">ID</th>
                   <th className="p-3">Navn</th>
                   <th className="p-3">Kontaktinfo</th>
+                  <th className="p-3">Tilgang & Lederansvar</th>
                   <th className="p-3">Personroller (Godkjente)</th>
                   <th className="p-3">Tjenestegrupper</th>
-                  <th className="p-3 text-right">Personlig lenke</th>
+                  <th className="p-3 text-right">Direktelenker</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {filteredPersoner.map((person) => {
-                  const isCopied = copiedPersonId === person.PersonID;
+                  const personTilgang = hentTilgang(db, person.PersonID);
+                  const isCopiedGeneral = copiedPersonId === person.PersonID;
+                  const isCopiedLeader = copiedPersonId === `${person.PersonID}-leader`;
+                  const isCopiedPersonal = copiedPersonId === `${person.PersonID}-personal`;
+
                   const personensRolleIds = db.personroller
                     .filter((pr) => pr.PersonID === person.PersonID && pr.Aktiv)
                     .map((pr) => pr.RolleID);
@@ -789,6 +819,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   );
 
                   const personensGrupper = finnTjenestegrupperForPerson(db, person.PersonID);
+                  const lederGrupper = personensGrupper.filter((t) => t.tilknytning === "Leder" || t.tilknytning === "Nestleder");
 
                   return (
                     <tr key={person.PersonID} className="hover:bg-slate-50/70 transition">
@@ -806,6 +837,28 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       <td className="p-3">
                         <div>{person.Epost}</div>
                         <div className="text-slate-400">{person.Telefon}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex flex-col gap-1 items-start">
+                          {personTilgang.isAdmin && (
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-amber-200">
+                              <Shield className="w-3 h-3" />
+                              Administrator
+                            </span>
+                          )}
+                          {personTilgang.isLeader && (
+                            <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-sky-200">
+                              <Star className="w-3 h-3 fill-sky-500 text-sky-500" />
+                              Tjenestegruppeleder
+                              {lederGrupper.length > 0 && ` (${lederGrupper.map((g) => g.gruppe.Gruppenavn).join(", ")})`}
+                            </span>
+                          )}
+                          {!personTilgang.isAdmin && !personTilgang.isLeader && (
+                            <span className="inline-flex items-center text-slate-500 text-[11px]">
+                              Medlem (Min side)
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-1 max-w-xs">
@@ -833,27 +886,54 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         </div>
                       </td>
                       <td className="p-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleCopyLink(person.PersonID)}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
-                            isCopied
-                              ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                              : "bg-slate-50 hover:bg-[#eef5f1] border-slate-200 text-slate-700 hover:text-[#2d5a3f]"
-                          }`}
-                        >
-                          {isCopied ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-600" />
-                              <span>Kopiert</span>
-                            </>
-                          ) : (
-                            <>
-                              <Share2 className="w-3 h-3" />
-                              <span>Kopier lenke</span>
-                            </>
+                        <div className="inline-flex flex-col sm:flex-row items-end sm:items-center justify-end gap-1.5">
+                          {personTilgang.isLeader && (
+                            <button
+                              type="button"
+                              onClick={() => handleCopyLink(person.PersonID, "leader")}
+                              className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
+                                isCopiedLeader
+                                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                  : "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800"
+                              }`}
+                              title="Kopier lenke som åpner Tjenestegruppeleder-fanen direkte for denne lederen"
+                            >
+                              {isCopiedLeader ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                  <span>Lederlenke kopiert!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Star className="w-3 h-3 fill-sky-500 text-sky-500" />
+                                  <span>Kopier leder-lenke</span>
+                                </>
+                              )}
+                            </button>
                           )}
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyLink(person.PersonID)}
+                            className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
+                              isCopiedGeneral || isCopiedPersonal
+                                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                : "bg-slate-50 hover:bg-[#eef5f1] border-slate-200 text-slate-700 hover:text-[#2d5a3f]"
+                            }`}
+                            title="Kopier standard personlig lenke"
+                          >
+                            {isCopiedGeneral || isCopiedPersonal ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-600" />
+                                <span>Kopiert!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Share2 className="w-3 h-3" />
+                                <span>Kopier Min side</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -866,11 +946,158 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       {/* FANE 3: GRUPPER */}
       {activeTab === "groups" && (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* Tjenestegruppeledere Oversiktskort */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Star className="w-4 h-4 fill-sky-500 text-sky-500" />
+                  <span>Oversikt over Tjenestegruppeledere & Direktelenker</span>
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Her har du full oversikt over hvem som leder hver gruppe. Kopier leder-lenken og send til vedkommende så de får full tilgang til både Min side og Tjenestegruppeleder-fanen.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {db.grupper
+                .filter((g) => g.Aktiv)
+                .map((gruppe) => {
+                  const leder = db.personer.find((p) => p.PersonID === gruppe.GruppelederID);
+                  const nestleder = db.personer.find((p) => p.PersonID === gruppe.NestlederID);
+                  const isCopiedLeder = leder && copiedPersonId === `${leder.PersonID}-leader`;
+                  const isCopiedNestleder = nestleder && copiedPersonId === `${nestleder.PersonID}-leader`;
+
+                  return (
+                    <div
+                      key={gruppe.GruppeID}
+                      className="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between space-y-3"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900 text-sm">
+                            {gruppe.Gruppenavn}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                            {gruppe.GruppeID}
+                          </span>
+                        </div>
+
+                        {/* Gruppeleder */}
+                        <div className="bg-white p-2.5 rounded-lg border border-slate-200/90 space-y-1.5">
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="flex items-center gap-1.5 font-semibold text-slate-900 text-xs">
+                              <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
+                              <span>{leder ? leder.Navn : "Ingen leder tildelt"}</span>
+                            </div>
+                            <span className="text-[10px] bg-sky-50 text-sky-700 font-medium px-1.5 py-0.5 rounded border border-sky-200">
+                              Leder
+                            </span>
+                          </div>
+                          {leder && (
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {leder.Epost} {leder.Telefon ? `· ${leder.Telefon}` : ""}
+                            </div>
+                          )}
+                          {leder && (
+                            <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyLink(leder.PersonID, "leader")}
+                                className={`flex-1 px-2 py-1 text-[11px] font-semibold rounded-md border transition inline-flex items-center justify-center gap-1 cursor-pointer ${
+                                  isCopiedLeder
+                                    ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                    : "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800"
+                                }`}
+                                title="Kopier direktelenke til lederfanen"
+                              >
+                                {isCopiedLeder ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-600" />
+                                    <span>Lederlenke kopiert!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Share2 className="w-3 h-3" />
+                                    <span>Kopier leder-lenke</span>
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onSelectPerson(leder.PersonID)}
+                                className="px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md border border-slate-200 cursor-pointer"
+                                title="Se appen som denne lederen"
+                              >
+                                Se som
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Nestleder */}
+                        {nestleder && (
+                          <div className="bg-white p-2.5 rounded-lg border border-slate-200/90 space-y-1.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1.5 font-semibold text-slate-900 text-xs">
+                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
+                                <span>{nestleder.Navn}</span>
+                              </div>
+                              <span className="text-[10px] bg-amber-50 text-amber-700 font-medium px-1.5 py-0.5 rounded border border-amber-200">
+                                Nestleder
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {nestleder.Epost} {nestleder.Telefon ? `· ${nestleder.Telefon}` : ""}
+                            </div>
+                            <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyLink(nestleder.PersonID, "leader")}
+                                className={`flex-1 px-2 py-1 text-[11px] font-semibold rounded-md border transition inline-flex items-center justify-center gap-1 cursor-pointer ${
+                                  isCopiedNestleder
+                                    ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                    : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+                                }`}
+                                title="Kopier direktelenke for nestleder"
+                              >
+                                {isCopiedNestleder ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-600" />
+                                    <span>Lederlenke kopiert!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Share2 className="w-3 h-3" />
+                                    <span>Kopier leder-lenke</span>
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onSelectPerson(nestleder.PersonID)}
+                                className="px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md border border-slate-200 cursor-pointer"
+                                title="Se appen som denne nestlederen"
+                              >
+                                Se som
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* Gruppeliste */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Users className="w-5 h-5 text-[#2d5a3f]" />
-              <span>Grupper</span>
+              <span>Gruppedetaljer & Medlemmer</span>
             </h3>
             <div className="flex items-center gap-2">
               <Filter className="w-4 h-4 text-slate-400 shrink-0" />

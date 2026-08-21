@@ -39,7 +39,10 @@ export const Header: React.FC<HeaderProps> = ({
   const tilgang = hentTilgang(db, selectedPersonId);
 
   const handleCopyLink = () => {
-    const link = genererPersonligLenke(selectedPersonId);
+    const link = genererPersonligLenke(
+      selectedPersonId,
+      activeView !== "personal" ? activeView : undefined
+    );
     navigator.clipboard.writeText(link).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);

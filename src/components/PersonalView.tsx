@@ -52,8 +52,9 @@ function byggPåmeldingsrader(
       const personerPå = tildelinger
         .map((t) => {
           const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-          const status = (svar?.Svar || "Venter") as SvarStatus;
-          if (status === "Avvist") return null;
+          const rawStatus = svar?.Svar || "Venter";
+          if (rawStatus === "Avvist") return null;
+          const status = rawStatus === "Bekreftet" ? ("Bekreftet" as const) : ("Venter" as const);
           const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
           return {
             personId: t.PersonID,
@@ -61,7 +62,7 @@ function byggPåmeldingsrader(
             status,
           };
         })
-        .filter((x): x is { personId: string; navn: string; status: SvarStatus } => x !== null);
+        .filter((x): x is { personId: string; navn: string; status: "Bekreftet" | "Venter" } => x !== null);
 
       const behov = getEffektivtBehov(g.GudstjenesteID, rolle, db.tjenestebehov);
       const ledige = Math.max(0, behov - personerPå.length);
@@ -74,7 +75,7 @@ function byggPåmeldingsrader(
 
       let status: PåmeldingsStatus = "full";
       if (min?.status === "Bekreftet") status = "min-bekreftet";
-      else if (min && min.status !== "Avvist") status = "min-venter";
+      else if (min) status = "min-venter";
       else if (ledige > 0 || minAvvist) status = "ledig";
 
       return { gudstjeneste: g, behov, ledige, personerPå, status };
