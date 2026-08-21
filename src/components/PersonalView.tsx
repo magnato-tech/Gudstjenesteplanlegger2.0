@@ -9,7 +9,6 @@ import { Rolle, SvarStatus } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { RolleIkon } from "./RolleIkon";
 import {
-  MapPin,
   CheckCircle2,
   Clock3,
   Check,
@@ -316,7 +315,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
             );
 
         return (
-          <div className="space-y-4">
+          <div className="space-y-2">
             {visningsRoller.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {visningsRoller.map((rolle) => (
@@ -343,104 +342,94 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
               return (
                 <div
                   key={gudstjeneste.GudstjenesteID}
-                  className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden"
+                  className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
                 >
-                  <div className="px-5 sm:px-6 pt-5 pb-3">
-                    <span className="text-[11px] font-bold text-[#2d5a3f] uppercase tracking-wider">
-                      {formatDato(gudstjeneste.Dato)}
-                      {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
-                    </span>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      {gudstjeneste.Tema || "Gudstjeneste"}
-                    </h3>
-                    {gudstjeneste.Sted && (
-                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                        <MapPin className="w-3 h-3" />
-                        {gudstjeneste.Sted}
-                      </p>
-                    )}
+                  <div className="px-4 sm:px-5 pt-2.5 pb-1.5">
+                    <p className="text-xs sm:text-sm text-slate-700 truncate">
+                      <span className="font-semibold text-[#2d5a3f]">
+                        {formatDato(gudstjeneste.Dato)}
+                        {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
+                      </span>
+                      <span className="font-semibold text-slate-900">
+                        {" · "}
+                        {gudstjeneste.Tema || "Gudstjeneste"}
+                      </span>
+                      {gudstjeneste.Sted ? (
+                        <span className="text-slate-500"> · {gudstjeneste.Sted}</span>
+                      ) : null}
+                    </p>
                   </div>
 
                   {mine.length > 0 && (
-                    <div className="px-5 sm:px-6 pb-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                        Mine oppgaver
-                      </p>
+                    <div className="px-4 sm:px-5">
                       {mine.map((item) => {
                         const isBekreftet = item.status === "Bekreftet";
                         const isAvvist = item.status === "Avvist";
-                        const isVenter = !isBekreftet && !isAvvist;
                         return (
-                          <div key={item.tildeling.TildelingID} className="border-b border-slate-100 py-3 last:border-0">
-                            <div className="flex items-center justify-between gap-3 min-h-[1.5rem]">
-                              <span className="inline-flex items-center gap-2.5 min-w-0">
-                                <RolleIkon rollenavn={item.rolle?.Rollenavn || ""} />
-                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  {item.rolle?.Rollenavn}
-                                </span>
-                              </span>
-                              <span className="text-sm font-semibold text-slate-800 text-right inline-flex items-center justify-end gap-1.5 min-h-[1.25rem]">
-                                {isAvvist ? null : (
-                                  <>
-                                    <span
-                                      className={`w-2 h-2 rounded-full shrink-0 ${
-                                        isBekreftet ? "bg-emerald-500" : "bg-amber-400"
-                                      }`}
-                                      title={isBekreftet ? "Bekreftet" : "Forespurt"}
-                                      aria-hidden
-                                    />
-                                    {person.Fornavn || person.Navn}
-                                  </>
-                                )}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleBekreft(
-                                    item.tildeling.TildelingID,
-                                    item.rolle!.Rollenavn,
-                                    gudstjeneste.Dato
-                                  )
-                                }
-                                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border cursor-pointer ${
-                                  isBekreftet
-                                    ? "bg-[#eef5f1] text-[#1e3e2b] border-[#86efac]"
-                                    : "bg-white hover:bg-[#eef5f1] text-[#2d5a3f] border-[#bbf7d0]"
-                                }`}
-                              >
-                                {isBekreftet ? "Bekreftet" : "Dette passer"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleAvkreft(
-                                    item.tildeling.TildelingID,
-                                    item.rolle!.Rollenavn,
-                                    gudstjeneste.Dato,
-                                    item.rolle!
-                                  )
-                                }
-                                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border cursor-pointer ${
-                                  isAvvist
-                                    ? "bg-rose-100 text-rose-800 border-rose-300"
-                                    : "bg-white hover:bg-rose-50 text-rose-700 border-rose-200"
-                                }`}
-                              >
-                                Kan ikke
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedRolleForModal(item.rolle!)}
-                                className="text-xs text-[#2d5a3f] underline cursor-pointer ml-auto"
-                              >
-                                Instruks
-                              </button>
-                            </div>
-                            {isVenter && (
-                              <p className="text-[11px] text-amber-800 mt-1.5">Du er forespurt</p>
-                            )}
+                          <div
+                            key={item.tildeling.TildelingID}
+                            className="flex items-center gap-2 py-1.5 border-t border-slate-100 overflow-x-auto"
+                          >
+                            <RolleIkon rollenavn={item.rolle?.Rollenavn || ""} />
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 shrink-0">
+                              {item.rolle?.Rollenavn}
+                            </span>
+                            <span className="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5 min-w-[4rem] shrink-0">
+                              {isAvvist ? null : (
+                                <>
+                                  <span
+                                    className={`w-2 h-2 rounded-full shrink-0 ${
+                                      isBekreftet ? "bg-emerald-500" : "bg-amber-400"
+                                    }`}
+                                    title={isBekreftet ? "Bekreftet" : "Forespurt"}
+                                    aria-hidden
+                                  />
+                                  {person.Fornavn || person.Navn}
+                                </>
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleBekreft(
+                                  item.tildeling.TildelingID,
+                                  item.rolle!.Rollenavn,
+                                  gudstjeneste.Dato
+                                )
+                              }
+                              className={`px-2 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer shrink-0 ${
+                                isBekreftet
+                                  ? "bg-[#eef5f1] text-[#1e3e2b] border-[#86efac]"
+                                  : "bg-white hover:bg-[#eef5f1] text-[#2d5a3f] border-[#bbf7d0]"
+                              }`}
+                            >
+                              {isBekreftet ? "Bekreftet" : "Dette passer"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAvkreft(
+                                  item.tildeling.TildelingID,
+                                  item.rolle!.Rollenavn,
+                                  gudstjeneste.Dato,
+                                  item.rolle!
+                                )
+                              }
+                              className={`px-2 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer shrink-0 ${
+                                isAvvist
+                                  ? "bg-rose-100 text-rose-800 border-rose-300"
+                                  : "bg-white hover:bg-rose-50 text-rose-700 border-rose-200"
+                              }`}
+                            >
+                              Kan ikke
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRolleForModal(item.rolle!)}
+                              className="text-[11px] text-[#2d5a3f] underline cursor-pointer shrink-0 ml-auto"
+                            >
+                              Instruks
+                            </button>
                           </div>
                         );
                       })}
@@ -448,12 +437,12 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                   )}
 
                   {mine.length === 0 && (
-                    <p className="px-5 sm:px-6 pb-3 text-xs text-slate-400">
-                      Du er ikke satt opp denne dagen.
+                    <p className="px-4 sm:px-5 py-1.5 text-xs text-slate-400 border-t border-slate-100">
+                      Ikke satt opp
                     </p>
                   )}
 
-                  <div className="px-5 sm:px-6 pb-4">
+                  <div className="px-4 sm:px-5 pb-2.5 pt-1">
                     <button
                       type="button"
                       onClick={() =>
@@ -462,23 +451,13 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                           [gudstjeneste.GudstjenesteID]: !visAlle,
                         }))
                       }
-                      className="text-xs font-semibold text-[#2d5a3f] hover:underline cursor-pointer"
+                      className="text-[11px] font-semibold text-[#2d5a3f] hover:underline cursor-pointer"
                     >
                       {visAlle ? "Skjul alle" : "Vis alle"}
                     </button>
 
                     {visAlle && (
-                      <div className="mt-2">
-                        <p className="text-[11px] text-slate-400 mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500" aria-hidden />
-                            Bekreftet
-                          </span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-amber-400" aria-hidden />
-                            Forespurt
-                          </span>
-                        </p>
+                      <div className="mt-1">
                         {rollerIOversikt.map((rolle) => {
                           const personer = personerIRolle(
                             gudstjeneste.GudstjenesteID,
@@ -487,15 +466,15 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                           return (
                             <div
                               key={rolle.RolleID}
-                              className="flex items-center justify-between gap-3 py-2.5 border-b border-slate-100 last:border-0 min-h-[2.5rem]"
+                              className="flex items-center justify-between gap-3 py-1.5 border-t border-slate-100 min-h-[2rem]"
                             >
-                              <span className="inline-flex items-center gap-2.5 min-w-0">
+                              <span className="inline-flex items-center gap-2 min-w-0">
                                 <RolleIkon rollenavn={rolle.Rollenavn} />
-                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                                   {rolle.Rollenavn}
                                 </span>
                               </span>
-                              <span className="text-sm font-semibold text-slate-800 text-right min-h-[1.25rem] inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                              <span className="text-sm font-semibold text-slate-800 text-right inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
                                 {personer.map((p) => (
                                   <span
                                     key={p.personId}

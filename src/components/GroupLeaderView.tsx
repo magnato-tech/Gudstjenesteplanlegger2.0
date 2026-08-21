@@ -6,7 +6,6 @@ import {
   finnMedlemmerIGruppe,
   getEffektivtBehov,
   genererPersonligLenke,
-  opprettPersonIRegister,
   saveDatabase,
   settDeltakelseForPerson,
   sikreGruppemedlemskap,
@@ -15,8 +14,11 @@ import { Person, Rolle, Tjenestebehov } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { RolleIkon } from "./RolleIkon";
 import {
+  GroupLeaderGuide,
+  GRUPPELEDER_VEILEDNING_KEY,
+} from "./GroupLeaderGuide";
+import {
   Users,
-  Calendar,
   Shield,
   Share2,
   Check,
@@ -25,6 +27,7 @@ import {
   BookOpen,
   Search,
   X,
+  HelpCircle,
 } from "lucide-react";
 
 interface GroupLeaderViewProps {
@@ -32,6 +35,17 @@ interface GroupLeaderViewProps {
   selectedPersonId: string;
   onUpdateDb: (updatedDb: DatabaseState) => void;
   onSelectPerson: (personId: string) => void;
+}
+
+function formatDato(dato: string): string {
+  const parsed = new Date(`${dato}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return dato;
+  return parsed.toLocaleDateString("nb-NO", {
+    weekday: "short",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
@@ -48,11 +62,25 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     rolleNavn: string;
     gudstjenesteDato: string;
   } | null>(null);
-  const [personToAssign, setPersonToAssign] = useState<string>("");
-  const [assignNewFornavn, setAssignNewFornavn] = useState("");
   const [medlemSok, setMedlemSok] = useState("");
   const [valgtMenighetsmedlem, setValgtMenighetsmedlem] = useState<Person | null>(null);
   const [redigerMin, setRedigerMin] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState(() => {
+    try {
+      return localStorage.getItem(GRUPPELEDER_VEILEDNING_KEY) !== "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const lukkVeiledning = () => {
+    setGuideOpen(false);
+    try {
+      localStorage.setItem(GRUPPELEDER_VEILEDNING_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  };
 
   const person = db.personer.find((p) => p.PersonID === selectedPersonId);
 
@@ -89,43 +117,19 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     });
   };
 
-  const handleExecuteAssign = () => {
-    if (!assignModal || !personToAssign) return;
+  const handleAssignPerson = (personId: string) => {
+    if (!assignModal) return;
     const updated = settDeltakelseForPerson(
       db,
-      personToAssign,
+      personId,
       assignModal.gudstjenesteId,
       assignModal.rolleId,
       "Avventer",
       "Forespurt av gruppeleder"
     );
     onUpdateDb(updated);
-    handleCopyLink(personToAssign);
+    handleCopyLink(personId);
     setAssignModal(null);
-    setPersonToAssign("");
-    setAssignNewFornavn("");
-  };
-
-  const handleCreateAndAssign = () => {
-    if (!assignModal) return;
-    const fornavn = assignNewFornavn.trim();
-    if (!fornavn) return;
-    const kjenteId = new Set(db.personer.map((p) => p.PersonID));
-    const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, [
-      {
-        gudstjenesteId: assignModal.gudstjenesteId,
-        rolleId: assignModal.rolleId,
-        rolleNavn: assignModal.rolleNavn,
-        dato: assignModal.gudstjenesteDato,
-      },
-    ]);
-    saveDatabase(updatedDb);
-    onUpdateDb(updatedDb);
-    const ny = updatedDb.personer.find((p) => !kjenteId.has(p.PersonID));
-    if (ny) handleCopyLink(ny.PersonID);
-    setAssignModal(null);
-    setPersonToAssign("");
-    setAssignNewFornavn("");
   };
 
   // Hvis personen ikke er registrert som leder for noen grupper:
@@ -296,7 +300,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold text-[#2d5a3f] uppercase tracking-wider">
             <Users className="w-4 h-4" />
-            <span>Tjenestegruppeleder-visning for {person?.Navn}</span>
+            <span>Tjenestegruppeleder</span>
           </div>
           <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mt-0.5">
             {currentGruppe?.Gruppenavn || "Tjenestegruppe"}
@@ -306,6 +310,15 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#2d5a3f] bg-[#eef5f1] hover:bg-[#dceee3] border border-[#d2e8d9] px-3 py-1.5 rounded-xl cursor-pointer"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Slik gjør du det
+          </button>
         {lededeGrupper.length > 1 && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-500 font-medium whitespace-nowrap">
@@ -325,8 +338,9 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           </div>
         )}
         </div>
+        </div>
 
-        <div>
+        <div data-guide="medlemmer">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
             Gruppemedlemmer
           </h3>
@@ -380,14 +394,14 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           {oversiktPersoner.length === 0 ? (
             <p className="text-xs text-slate-400">Ingen medlemmer i gruppen ennå.</p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-1.5" data-guide="del-lenke">
               {oversiktPersoner
                 .slice()
                 .sort((a, b) => a.Navn.localeCompare(b.Navn, "nb"))
                 .map((m) => (
                   <li
                     key={m.PersonID}
-                    className="flex items-center justify-between gap-2 border border-slate-100 rounded-lg px-3 py-2"
+                    className="flex items-center justify-between gap-2 px-1 py-1"
                   >
                     <span className="text-sm font-medium text-slate-800">{m.Navn}</span>
                     <button
@@ -409,20 +423,8 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
         </div>
       </div>
 
-      {/* SEKSJON 1: Bemanningsstatus for tjenestegruppens roller */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-[#2d5a3f]" />
-              <span>Bemanningsstatus for tjenestegruppens roller</span>
-            </h3>
-            <p className="text-xs text-slate-500">
-              Gul prikk = forespurt. Grønn = bekreftet. Trykk på navnet for å bytte. Kryss fjerner
-              personen.
-            </p>
-          </div>
-        </div>
+      <div className="space-y-2" data-guide="gudstjenester">
+        <h3 className="text-sm font-bold text-slate-900">Kommende gudstjenester</h3>
 
         {gruppensRoller.length === 0 ? (
           <div className="bg-white p-6 rounded-2xl border border-slate-200 text-center">
@@ -432,37 +434,40 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
             </p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-2">
             {db.gudstjenester
               .filter((g) => g.Dato >= new Date().toISOString().split("T")[0])
               .slice()
               .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`))
               .map((gudstjeneste) => {
+              const åpneSettOpp = (rolle: Rolle) =>
+                setAssignModal({
+                  gudstjenesteId: gudstjeneste.GudstjenesteID,
+                  rolleId: rolle.RolleID,
+                  rolleNavn: rolle.Rollenavn,
+                  gudstjenesteDato: gudstjeneste.Dato,
+                });
+
               return (
                 <div
                   key={gudstjeneste.GudstjenesteID}
-                  className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4"
+                  className="bg-white rounded-2xl px-4 py-2.5 border border-slate-200 shadow-xs space-y-2"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                    <div>
-                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        {new Date(`${gudstjeneste.Dato}T12:00:00`).toLocaleDateString("nb-NO", {
-                          weekday: "long",
-                          day: "numeric",
-                          month: "long",
-                        })}{" "}
-                        &bull; kl. {gudstjeneste.Tid}
-                      </span>
-                      <h4 className="text-base sm:text-lg font-bold text-slate-900">
-                        {gudstjeneste.Tema || "Gudstjeneste"}
-                      </h4>
-                    </div>
-                    <span className="text-xs text-slate-500 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200 self-start sm:self-auto">
-                      {gudstjeneste.Sted}
+                  <p className="text-xs sm:text-sm text-slate-700 truncate">
+                    <span className="font-semibold text-[#2d5a3f]">
+                      {formatDato(gudstjeneste.Dato)}
+                      {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
                     </span>
-                  </div>
+                    <span className="font-semibold text-slate-900">
+                      {" · "}
+                      {gudstjeneste.Tema || "Gudstjeneste"}
+                    </span>
+                    {gudstjeneste.Sted ? (
+                      <span className="text-slate-500"> · {gudstjeneste.Sted}</span>
+                    ) : null}
+                  </p>
 
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {gruppensRoller.map((rolle) => {
                       const minBehov = getEffektivtBehov(
                         gudstjeneste.GudstjenesteID,
@@ -483,17 +488,30 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
 
                       const antallTildelt = synlige.length;
                       const dekkerMin = antallTildelt >= minBehov;
+                      const harLedig = antallTildelt < minBehov;
                       const minNokkel = `${gudstjeneste.GudstjenesteID}:${rolle.RolleID}`;
                       const viserMinFelt = redigerMin === minNokkel;
+
+                      const settOppKnapp = (
+                        <button
+                          type="button"
+                          onClick={() => åpneSettOpp(rolle)}
+                          data-guide="sett-opp"
+                          className="px-2.5 py-1 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md text-xs font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                        >
+                          <UserPlus className="w-3 h-3" />
+                          <span>Sett opp</span>
+                        </button>
+                      );
 
                       return (
                         <div
                           key={rolle.RolleID}
-                          className={`p-3.5 rounded-xl border ${
+                          className={`px-3 py-2 rounded-xl border ${
                             dekkerMin ? "border-slate-200" : "border-amber-200"
                           }`}
                         >
-                          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="inline-flex items-center gap-2 min-w-0">
                               <RolleIkon rollenavn={rolle.Rollenavn} />
                               <span className="font-bold text-sm text-slate-900">
@@ -543,95 +561,73 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                               >
                                 {antallTildelt} / {minBehov}
                               </button>
+                              {harLedig ? settOppKnapp : null}
                             </div>
                           </div>
 
-                            <div className="space-y-1 my-2">
-                              {synlige.length === 0 ? (
-                                <span className="text-xs text-slate-400 italic block">
-                                  Ingen satt opp ennå
-                                </span>
-                              ) : (
-                                synlige.map((t) => {
-                                  const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
-                                  const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                                  const erBekreftet = svar?.Svar === "Bekreftet";
-                                  const visningsnavn = p?.Fornavn || p?.Navn || t.PersonID;
+                          {synlige.length > 0 && (
+                            <div className="mt-1">
+                              {synlige.map((t) => {
+                                const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
+                                const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+                                const erBekreftet = svar?.Svar === "Bekreftet";
+                                const visningsnavn = p?.Fornavn || p?.Navn || t.PersonID;
 
-                                  return (
-                                    <div
-                                      key={t.TildelingID}
-                                      className="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0"
+                                return (
+                                  <div
+                                    key={t.TildelingID}
+                                    data-guide="status"
+                                    className="flex items-center gap-2 py-1 border-t border-slate-100"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleSettStatus(
+                                          t.PersonID,
+                                          gudstjeneste.GudstjenesteID,
+                                          rolle.RolleID,
+                                          erBekreftet ? "Avventer" : "Deltar",
+                                          false
+                                        )
+                                      }
+                                      className="flex-1 min-w-0 flex items-center justify-between gap-2 text-left cursor-pointer rounded-lg px-1 py-0.5 hover:bg-slate-50"
+                                      title={
+                                        erBekreftet
+                                          ? "Trykk for å sette tilbake til forespurt"
+                                          : "Trykk for å bekrefte"
+                                      }
                                     >
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleSettStatus(
-                                            t.PersonID,
-                                            gudstjeneste.GudstjenesteID,
-                                            rolle.RolleID,
-                                            erBekreftet ? "Avventer" : "Deltar",
-                                            false
-                                          )
-                                        }
-                                        className="flex-1 min-w-0 flex items-center justify-between gap-2 text-left cursor-pointer rounded-lg px-1 py-0.5 hover:bg-slate-50"
-                                        title={
-                                          erBekreftet
-                                            ? "Trykk for å sette tilbake til forespurt"
-                                            : "Trykk for å bekrefte"
-                                        }
-                                      >
-                                        <span className="text-sm font-medium text-slate-800 truncate">
-                                          {visningsnavn}
-                                        </span>
-                                        <span className="inline-flex items-center gap-1.5 shrink-0">
-                                          <span
-                                            className={`w-2.5 h-2.5 rounded-full ${
-                                              erBekreftet ? "bg-emerald-500" : "bg-amber-400"
-                                            }`}
-                                            aria-hidden
-                                          />
-                                        </span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleSettStatus(
-                                            t.PersonID,
-                                            gudstjeneste.GudstjenesteID,
-                                            rolle.RolleID,
-                                            "Deltar ikke",
-                                            false
-                                          )
-                                        }
-                                        className="p-1 text-slate-300 hover:text-rose-600 cursor-pointer"
-                                        title="Fjern"
-                                      >
-                                        <X className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  );
-                                })
-                              )}
+                                      <span className="text-sm font-medium text-slate-800 truncate">
+                                        {visningsnavn}
+                                      </span>
+                                      <span
+                                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                          erBekreftet ? "bg-emerald-500" : "bg-amber-400"
+                                        }`}
+                                        aria-hidden
+                                      />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleSettStatus(
+                                          t.PersonID,
+                                          gudstjeneste.GudstjenesteID,
+                                          rolle.RolleID,
+                                          "Deltar ikke",
+                                          false
+                                        )
+                                      }
+                                      className="p-1 text-slate-300 hover:text-rose-600 cursor-pointer"
+                                      title="Fjern"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
                             </div>
-
-                          <div className="pt-2 flex justify-end">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAssignModal({
-                                  gudstjenesteId: gudstjeneste.GudstjenesteID,
-                                  rolleId: rolle.RolleID,
-                                  rolleNavn: rolle.Rollenavn,
-                                  gudstjenesteDato: gudstjeneste.Dato,
-                                })
-                              }
-                              className="px-2.5 py-1 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md text-xs font-semibold flex items-center gap-1 cursor-pointer"
-                            >
-                              <UserPlus className="w-3 h-3" />
-                              <span>Sett opp</span>
-                            </button>
-                          </div>
+                          )}
                         </div>
                       );
                     })}
@@ -646,93 +642,64 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
       {/* Modal for å tildele medlem */}
       {assignModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              Tildel person til {assignModal.rolleNavn}
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200">
+            <h3 className="text-lg font-bold text-slate-900 mb-0.5">
+              Sett opp {assignModal.rolleNavn}
             </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Gudstjeneste: {assignModal.gudstjenesteDato} ({assignModal.gudstjenesteId})
+            <p className="text-xs text-slate-500 mb-3">
+              {formatDato(assignModal.gudstjenesteDato)}
             </p>
-
-            <div className="space-y-3 mb-6">
-              <label className="text-xs font-semibold text-slate-600 block">
-                Velg person:
-              </label>
-              <select
-                value={personToAssign}
-                onChange={(e) => setPersonToAssign(e.target.value)}
-                className="w-full text-sm border border-slate-300 rounded-xl p-2.5 bg-slate-50 focus:ring-2 focus:ring-[#2d5a3f] focus:outline-hidden"
-              >
-                <option value="">-- Velg person --</option>
-                {/* Foreslå først personer som har denne rollen */}
-                <optgroup label="Gruppens medlemmer med denne rollen">
-                  {gruppensMedlemmer
-                    .filter((m) =>
-                      m.personroller.some((r) => r.RolleID === assignModal.rolleId)
-                    )
-                    .map((m) => (
-                      <option key={m.person.PersonID} value={m.person.PersonID}>
-                        {m.person.Navn} ({m.person.PersonID})
-                      </option>
-                    ))}
-                </optgroup>
-                <optgroup label="Øvrige gruppemedlemmer">
-                  {gruppensMedlemmer
-                    .filter(
-                      (m) =>
-                        !m.personroller.some((r) => r.RolleID === assignModal.rolleId)
-                    )
-                    .map((m) => (
-                      <option key={m.person.PersonID} value={m.person.PersonID}>
-                        {m.person.Navn} ({m.person.PersonID})
-                      </option>
-                    ))}
-                </optgroup>
-              </select>
-            </div>
-
-            <div className="border-t border-slate-100 pt-3 space-y-2">
-              <label className="text-xs font-semibold text-slate-600 block">
-                Eller opprett ny person
-              </label>
-              <input
-                type="text"
-                placeholder="Fornavn, eller fornavn etternavn"
-                value={assignNewFornavn}
-                onChange={(e) => setAssignNewFornavn(e.target.value)}
-                className="w-full text-sm border border-slate-300 rounded-xl p-2.5 bg-slate-50"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2">
+            {(() => {
+              const opptatt = new Set(
+                db.tildelinger
+                  .filter(
+                    (t) =>
+                      t.GudstjenesteID === assignModal.gudstjenesteId &&
+                      t.RolleID === assignModal.rolleId
+                  )
+                  .filter((t) => {
+                    const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+                    return svar?.Svar !== "Avvist";
+                  })
+                  .map((t) => t.PersonID)
+              );
+              const ledige = oversiktPersoner
+                .filter((p) => !opptatt.has(p.PersonID))
+                .slice()
+                .sort((a, b) =>
+                  (a.Fornavn || a.Navn).localeCompare(b.Fornavn || b.Navn, "nb")
+                );
+              if (ledige.length === 0) {
+                return (
+                  <p className="text-sm text-slate-500">
+                    Alle i gruppen er allerede satt opp denne dagen.
+                  </p>
+                );
+              }
+              return (
+                <ul className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                  {ledige.map((p) => (
+                    <li key={p.PersonID}>
+                      <button
+                        type="button"
+                        onClick={() => handleAssignPerson(p.PersonID)}
+                        className="w-full text-left px-4 py-3 text-sm font-medium text-slate-900 hover:bg-[#eef5f1] cursor-pointer"
+                      >
+                        {p.Fornavn || p.Navn}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+            <div className="flex justify-end mt-4">
               <button
                 type="button"
-                onClick={() => {
-                  setAssignModal(null);
-                  setAssignNewFornavn("");
-                }}
+                onClick={() => setAssignModal(null)}
                 className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
               >
                 Avbryt
               </button>
-              {assignNewFornavn.trim() ? (
-                <button
-                  type="button"
-                  onClick={handleCreateAndAssign}
-                  className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
-                >
-                  Opprett og tildel
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!personToAssign}
-                  onClick={handleExecuteAssign}
-                  className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white font-semibold rounded-xl shadow-xs transition cursor-pointer"
-                >
-                  Lagre tildeling
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -755,6 +722,8 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           onClose={() => setSelectedRolleForModal(null)}
         />
       )}
+
+      <GroupLeaderGuide open={guideOpen} onClose={lukkVeiledning} />
     </div>
   );
 };

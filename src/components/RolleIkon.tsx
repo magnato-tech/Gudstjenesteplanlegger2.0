@@ -67,7 +67,7 @@ export const RolleIkon: React.FC<{ rollenavn: string; className?: string }> = ({
   const { Icon, wrap, icon } = velgUtseende(rollenavn);
   return (
     <span
-      className={`inline-flex items-center justify-center w-8 h-8 rounded-full shrink-0 ${wrap} ${className}`}
+      className={`inline-flex items-center justify-center w-7 h-7 rounded-full shrink-0 ${wrap} ${className}`}
       aria-hidden
     >
       <Icon className={`w-4 h-4 ${icon}`} strokeWidth={2.25} />

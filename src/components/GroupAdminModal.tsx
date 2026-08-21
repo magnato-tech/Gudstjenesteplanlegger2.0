@@ -17,6 +17,8 @@ interface GroupAdminModalProps {
 
 type Lederskap = "Leder" | "Nestleder" | "Medlem";
 
+const LEDERSKAP_VERDIER = new Set(["Medlem", "Leder", "Nestleder", "Medleder"]);
+
 function visningsinitialer(navn: string): string {
   const parts = String(navn || "")
     .trim()
@@ -115,10 +117,14 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
     return "Medlem";
   };
 
-  const medlemsrolleFor = (personId: string) =>
-    medlemmer.find((gm) => gm.PersonID === personId && gm.Aktiv)?.Medlemsrolle || "";
+  const tjenesterolleFor = (personId: string) => {
+    const verdi =
+      medlemmer.find((gm) => gm.PersonID === personId && gm.Aktiv)?.Medlemsrolle || "";
+    if (!verdi || LEDERSKAP_VERDIER.has(verdi)) return "";
+    return verdi;
+  };
 
-  const settMedlemsrolle = (personId: string, verdi: string) => {
+  const settTjenesterolle = (personId: string, verdi: string) => {
     setMedlemmer((prev) => {
       const existing = prev.find((gm) => gm.PersonID === personId);
       if (existing) {
@@ -159,7 +165,7 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
           GruppeMedlemID: nesteId(prev),
           GruppeID: gruppeId,
           PersonID: personId,
-          Medlemsrolle: "Medlem",
+          Medlemsrolle: "",
           Aktiv: true,
           FraDato: now,
           TilDato: "",
@@ -373,14 +379,13 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
                 const rolle = lederskapFor(person.PersonID);
                 const erLeder = rolle === "Leder";
                 const erNestleder = rolle === "Nestleder";
-                const medlemsrolle = medlemsrolleFor(person.PersonID);
+                const tjenesterolle = tjenesterolleFor(person.PersonID);
                 const rollevalg = Array.from(
                   new Set(
                     [
                       ...gruppeRoller.map((r) => r.Rollenavn),
-                      medlemsrolle,
-                      "Medlem",
-                    ].filter(Boolean)
+                      tjenesterolle,
+                    ].filter((navn) => navn && !LEDERSKAP_VERDIER.has(navn))
                   )
                 );
 
@@ -436,30 +441,39 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
                         </div>
 
                         <div className="grid grid-cols-2 gap-2 mt-2">
-                          <select
-                            value={medlemsrolle}
-                            onChange={(e) => settMedlemsrolle(person.PersonID, e.target.value)}
-                            className="w-full text-[11px] border border-slate-200 rounded-lg p-1.5 bg-slate-50"
-                            title="Medlemsrolle"
-                          >
-                            <option value="">Medlemsrolle</option>
-                            {rollevalg.map((navn) => (
-                              <option key={navn} value={navn}>
-                                {navn}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={rolle}
-                            onChange={(e) =>
-                              settLederskap(person.PersonID, e.target.value as Lederskap)
-                            }
-                            className="w-full text-[11px] border border-slate-200 rounded-lg p-1.5 bg-slate-50"
-                          >
-                            <option value="Medlem">Medlem</option>
-                            <option value="Leder">Leder</option>
-                            <option value="Nestleder">Nestleder</option>
-                          </select>
+                          <label className="block min-w-0">
+                            <span className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                              Tjenesterolle
+                            </span>
+                            <select
+                              value={tjenesterolle}
+                              onChange={(e) => settTjenesterolle(person.PersonID, e.target.value)}
+                              className="w-full text-[11px] border border-slate-200 rounded-lg p-1.5 bg-slate-50"
+                            >
+                              <option value="">Velg tjenesterolle</option>
+                              {rollevalg.map((navn) => (
+                                <option key={navn} value={navn}>
+                                  {navn}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="block min-w-0">
+                            <span className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                              Medlemsrolle
+                            </span>
+                            <select
+                              value={rolle}
+                              onChange={(e) =>
+                                settLederskap(person.PersonID, e.target.value as Lederskap)
+                              }
+                              className="w-full text-[11px] border border-slate-200 rounded-lg p-1.5 bg-slate-50"
+                            >
+                              <option value="Medlem">Medlem</option>
+                              <option value="Leder">Leder</option>
+                              <option value="Nestleder">Nestleder</option>
+                            </select>
+                          </label>
                         </div>
                       </div>
                     </div>
