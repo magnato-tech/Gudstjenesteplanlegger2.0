@@ -28,6 +28,8 @@ import {
   Search,
   X,
   HelpCircle,
+  CheckCircle2,
+  CircleHelp,
 } from "lucide-react";
 
 interface GroupLeaderViewProps {
@@ -36,6 +38,8 @@ interface GroupLeaderViewProps {
   onUpdateDb: (updatedDb: DatabaseState) => void;
   onSelectPerson: (personId: string) => void;
 }
+
+type OversiktFilter = "bekreftet" | "venter" | "ledige" | "medlemmer" | null;
 
 function formatDato(dato: string): string {
   const parsed = new Date(`${dato}T12:00:00`);
@@ -46,6 +50,13 @@ function formatDato(dato: string): string {
     month: "long",
     year: "numeric",
   });
+}
+
+function svarForTildeling(
+  db: DatabaseState,
+  tildelingId: string
+): "Bekreftet" | "Venter" | "Avvist" {
+  return db.svar.find((s) => s.TildelingID === tildelingId)?.Svar || "Venter";
 }
 
 export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
@@ -65,6 +76,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
   const [medlemSok, setMedlemSok] = useState("");
   const [valgtMenighetsmedlem, setValgtMenighetsmedlem] = useState<Person | null>(null);
   const [redigerMin, setRedigerMin] = useState<string | null>(null);
+  const [oversiktFilter, setOversiktFilter] = useState<OversiktFilter>(null);
   const [guideOpen, setGuideOpen] = useState(() => {
     try {
       return localStorage.getItem(GRUPPELEDER_VEILEDNING_KEY) !== "1";
@@ -198,6 +210,57 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     ? db.roller.filter((r) => r.GruppeID === currentGruppe.GruppeID && r.Aktiv)
     : [];
 
+  const iDag = new Date().toISOString().split("T")[0];
+  const kommendeGudstjenester = db.gudstjenester
+    .filter((g) => g.Dato >= iDag)
+    .slice()
+    .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`));
+
+  const oversikt = { bekreftet: 0, venter: 0, ledige: 0, forfall: 0, behov: 0 };
+  for (const gudstjeneste of kommendeGudstjenester) {
+    for (const rolle of gruppensRoller) {
+      const behov = getEffektivtBehov(
+        gudstjeneste.GudstjenesteID,
+        rolle,
+        db.tjenestebehov
+      );
+      oversikt.behov += behov;
+      const tildelinger = db.tildelinger.filter(
+        (t) =>
+          t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
+          t.RolleID === rolle.RolleID
+      );
+      let aktive = 0;
+      for (const t of tildelinger) {
+        const svar = svarForTildeling(db, t.TildelingID);
+        if (svar === "Avvist") oversikt.forfall += 1;
+        else if (svar === "Bekreftet") {
+          oversikt.bekreftet += 1;
+          aktive += 1;
+        } else {
+          oversikt.venter += 1;
+          aktive += 1;
+        }
+      }
+      oversikt.ledige += Math.max(0, behov - aktive);
+    }
+  }
+  const bekreftetProsent =
+    oversikt.behov > 0 ? Math.round((oversikt.bekreftet / oversikt.behov) * 100) : 0;
+  const ledigeOgForfall = oversikt.ledige + oversikt.forfall;
+
+  const velgOversiktFilter = (neste: OversiktFilter) => {
+    const aktiv = oversiktFilter === neste ? null : neste;
+    setOversiktFilter(aktiv);
+    if (aktiv === "medlemmer") {
+      window.requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLElement>("[data-guide='medlemmer']")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  };
+
   const handleSettStatus = (
     personId: string,
     gudstjenesteId: string,
@@ -300,7 +363,10 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold text-[#2d5a3f] uppercase tracking-wider">
             <Users className="w-4 h-4" />
-            <span>Tjenestegruppeleder</span>
+            <span>
+              Tjenestegruppeleder-visning
+              {person?.Fornavn ? ` for ${person.Fornavn}` : ""}
+            </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mt-0.5">
             {currentGruppe?.Gruppenavn || "Tjenestegruppe"}
@@ -340,7 +406,88 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
         </div>
         </div>
 
-        <div data-guide="medlemmer">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {(
+            [
+              {
+                id: "bekreftet" as const,
+                tall: oversikt.bekreftet,
+                label: `Bekreftet (${bekreftetProsent}%)`,
+                Icon: CheckCircle2,
+                wrap: "bg-emerald-50 border-emerald-100 text-emerald-900",
+                icon: "text-emerald-600",
+                aktiv: "ring-2 ring-emerald-400",
+              },
+              {
+                id: "venter" as const,
+                tall: oversikt.venter,
+                label: "Venter på svar",
+                Icon: CircleHelp,
+                wrap: "bg-amber-50 border-amber-100 text-amber-950",
+                icon: "text-amber-500",
+                aktiv: "ring-2 ring-amber-400",
+              },
+              {
+                id: "ledige" as const,
+                tall: ledigeOgForfall,
+                label: "Ledige slotter / Forfall",
+                Icon: AlertCircle,
+                wrap: "bg-rose-50 border-rose-100 text-rose-950",
+                icon: "text-rose-500",
+                aktiv: "ring-2 ring-rose-400",
+              },
+              {
+                id: "medlemmer" as const,
+                tall: oversiktPersoner.length,
+                label: "Medlemmer",
+                Icon: Users,
+                wrap: "bg-sky-50 border-sky-100 text-sky-950",
+                icon: "text-sky-600",
+                aktiv: "ring-2 ring-sky-400",
+              },
+            ]
+          ).map((kort) => {
+            const valgt = oversiktFilter === kort.id;
+            return (
+              <button
+                key={kort.id}
+                type="button"
+                onClick={() => velgOversiktFilter(kort.id)}
+                aria-pressed={valgt}
+                className={`text-left rounded-2xl border px-4 py-3 transition cursor-pointer ${kort.wrap} ${
+                  valgt ? kort.aktiv : "hover:brightness-[0.98]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-3xl font-bold tabular-nums leading-none">{kort.tall}</span>
+                  <kort.Icon className={`w-6 h-6 ${kort.icon} shrink-0`} />
+                </div>
+                <p className="text-xs font-semibold mt-2 leading-snug">{kort.label}</p>
+              </button>
+            );
+          })}
+        </div>
+        {oversiktFilter && (
+          <p className="text-[11px] text-slate-500">
+            Viser {oversiktFilter === "bekreftet"
+              ? "bekreftede oppgaver"
+              : oversiktFilter === "venter"
+                ? "oppgaver som venter på svar"
+                : oversiktFilter === "ledige"
+                  ? "roller med ledige plasser eller forfall"
+                  : "gruppemedlemmer"}
+            . Trykk kortet igjen for å vise alle.
+          </p>
+        )}
+
+        <div
+          data-guide="medlemmer"
+          className={
+            oversiktFilter === "medlemmer"
+              ? "rounded-xl ring-2 ring-sky-300 p-3 -mx-1"
+              : undefined
+          }
+        >
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
             Gruppemedlemmer
           </h3>
@@ -423,6 +570,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
         </div>
       </div>
 
+      {oversiktFilter !== "medlemmer" && (
       <div className="space-y-2" data-guide="gudstjenester">
         <h3 className="text-sm font-bold text-slate-900">Kommende gudstjenester</h3>
 
@@ -435,11 +583,75 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           </div>
         ) : (
           <div className="space-y-2">
-            {db.gudstjenester
-              .filter((g) => g.Dato >= new Date().toISOString().split("T")[0])
-              .slice()
-              .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`))
-              .map((gudstjeneste) => {
+            {(() => {
+              const visbare = kommendeGudstjenester
+                .map((gudstjeneste) => {
+                  const roller = gruppensRoller
+                    .map((rolle) => {
+                      const minBehov = getEffektivtBehov(
+                        gudstjeneste.GudstjenesteID,
+                        rolle,
+                        db.tjenestebehov
+                      );
+                      const tildelinger = db.tildelinger.filter(
+                        (t) =>
+                          t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
+                          t.RolleID === rolle.RolleID
+                      );
+                      const synlige = tildelinger.filter(
+                        (t) => svarForTildeling(db, t.TildelingID) !== "Avvist"
+                      );
+                      const forfall = tildelinger.filter(
+                        (t) => svarForTildeling(db, t.TildelingID) === "Avvist"
+                      );
+                      const bekreftede = synlige.filter(
+                        (t) => svarForTildeling(db, t.TildelingID) === "Bekreftet"
+                      );
+                      const ventende = synlige.filter(
+                        (t) => svarForTildeling(db, t.TildelingID) !== "Bekreftet"
+                      );
+                      const harLedig = synlige.length < minBehov;
+                      const visRolle =
+                        !oversiktFilter || oversiktFilter === "medlemmer"
+                          ? true
+                          : oversiktFilter === "ledige"
+                            ? harLedig || forfall.length > 0
+                            : oversiktFilter === "bekreftet"
+                              ? bekreftede.length > 0
+                              : ventende.length > 0;
+                      const visPersoner =
+                        oversiktFilter === "bekreftet"
+                          ? bekreftede
+                          : oversiktFilter === "venter"
+                            ? ventende
+                            : synlige;
+                      return {
+                        rolle,
+                        minBehov,
+                        synlige,
+                        visPersoner,
+                        harLedig,
+                        visRolle,
+                      };
+                    })
+                    .filter((r) => r.visRolle);
+                  return { gudstjeneste, roller };
+                })
+                .filter((rad) =>
+                  oversiktFilter && oversiktFilter !== "medlemmer"
+                    ? rad.roller.length > 0
+                    : true
+                );
+
+              if (visbare.length === 0) {
+                return (
+                  <p className="text-sm text-slate-500 bg-white rounded-2xl border border-slate-200 px-4 py-6 text-center">
+                    Ingen treff for dette filteret. Trykk kortet igjen for å vise alle.
+                  </p>
+                );
+              }
+
+              return visbare.map(({ gudstjeneste, roller }) => {
               const åpneSettOpp = (rolle: Rolle) =>
                 setAssignModal({
                   gudstjenesteId: gudstjeneste.GudstjenesteID,
@@ -468,27 +680,9 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                   </p>
 
                   <div className="space-y-2">
-                    {gruppensRoller.map((rolle) => {
-                      const minBehov = getEffektivtBehov(
-                        gudstjeneste.GudstjenesteID,
-                        rolle,
-                        db.tjenestebehov
-                      );
-
-                      const tildelinger = db.tildelinger.filter(
-                        (t) =>
-                          t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                          t.RolleID === rolle.RolleID
-                      );
-
-                      const synlige = tildelinger.filter((t) => {
-                        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                        return svar?.Svar !== "Avvist";
-                      });
-
+                    {roller.map(({ rolle, minBehov, synlige, visPersoner, harLedig }) => {
                       const antallTildelt = synlige.length;
                       const dekkerMin = antallTildelt >= minBehov;
-                      const harLedig = antallTildelt < minBehov;
                       const minNokkel = `${gudstjeneste.GudstjenesteID}:${rolle.RolleID}`;
                       const viserMinFelt = redigerMin === minNokkel;
 
@@ -565,12 +759,12 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                             </div>
                           </div>
 
-                          {synlige.length > 0 && (
+                          {visPersoner.length > 0 && (
                             <div className="mt-1">
-                              {synlige.map((t) => {
+                              {visPersoner.map((t) => {
                                 const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
-                                const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                                const erBekreftet = svar?.Svar === "Bekreftet";
+                                const erBekreftet =
+                                  svarForTildeling(db, t.TildelingID) === "Bekreftet";
                                 const visningsnavn = p?.Fornavn || p?.Navn || t.PersonID;
 
                                 return (
@@ -634,10 +828,12 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                   </div>
                 </div>
               );
-            })}
+              });
+            })()}
           </div>
         )}
       </div>
+      )}
 
       {/* Modal for å tildele medlem */}
       {assignModal && (
