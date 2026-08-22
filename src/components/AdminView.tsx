@@ -9,6 +9,7 @@ import {
   opprettPersonIRegister,
   saveDatabase,
   hentTilgang,
+  svarPaaTildeling,
   AppView,
 } from "../services/dataService";
 import {
@@ -20,6 +21,8 @@ import {
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { ImportMigrationModal } from "./ImportMigrationModal";
 import { GroupAdminModal } from "./GroupAdminModal";
+import { GoogleSheetsSync } from "./GoogleSheetsSync";
+import { RolleIkon } from "./RolleIkon";
 import {
   Calendar,
   Users,
@@ -40,6 +43,10 @@ import {
   Sliders,
   AlertTriangle,
   ChevronDown,
+  FileSpreadsheet,
+  Clock,
+  X,
+  UserPlus,
 } from "lucide-react";
 
 interface AdminViewProps {
@@ -77,7 +84,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onUpdateDb,
   onSelectPerson,
 }) => {
-  const [activeTab, setActiveTab] = useState<"services" | "people" | "groups" | "roles">(
+  const [activeTab, setActiveTab] = useState<"services" | "people" | "groups" | "roles" | "sync">(
     "services"
   );
   const [groupTypeFilter, setGroupTypeFilter] = useState("tjenestegruppe");
@@ -135,7 +142,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   const handleCopyLink = (personId: string, view?: AppView) => {
-    const link = genererPersonligLenke(personId, view);
+    const link = genererPersonligLenke(personId, view, db);
     navigator.clipboard.writeText(link).then(() => {
       const key = view ? `${personId}-${view}` : personId;
       setCopiedPersonId(key);
@@ -324,6 +331,23 @@ export const AdminView: React.FC<AdminViewProps> = ({
     onUpdateDb(updatedDb);
   };
 
+  // 6. Oppdater status for tildeling (Bekreftet / Venter / Avvist)
+  const handleUpdatePersonStatus = (
+    tildelingId: string,
+    personId: string,
+    nyttSvar: "Bekreftet" | "Venter" | "Avvist"
+  ) => {
+    const kommentar =
+      nyttSvar === "Bekreftet"
+        ? "Bekreftet av administrator (muntlig/ja)"
+        : nyttSvar === "Avvist"
+        ? "Meldt forfall via administrator"
+        : "Forespurt av administrator";
+    const updatedDb = svarPaaTildeling(db, tildelingId, personId, nyttSvar, kommentar);
+    saveDatabase(updatedDb);
+    onUpdateDb(updatedDb);
+  };
+
   const handleSettRolleGruppe = (rolleId: string, gruppeId: string) => {
     const now = new Date().toISOString().split("T")[0];
     const updatedDb: DatabaseState = {
@@ -382,6 +406,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setActiveTab("sync")}
+            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+            <span>Google Sheets & Synk</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowImportModal(true)}
@@ -482,23 +515,35 @@ export const AdminView: React.FC<AdminViewProps> = ({
           <Layers className="w-4 h-4" />
           <span>Roller ({db.roller.length})</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab("sync")}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
+            activeTab === "sync"
+              ? "border-[#2d5a3f] text-[#2d5a3f]"
+              : "border-transparent text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          <span>Google Sheets & Data</span>
+        </button>
       </div>
 
-      {/* FANE 1: GUDSTJENESTER & BEMANNINGSMATRISE */}
+      {/* FANE 1: GUDSTJENESTER & OPPGAVEPLAN (LISTEFORM MED ADMIN-KONTROLLER) */}
       {activeTab === "services" && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs">
             <div>
               <h3 className="text-lg font-bold text-slate-900">
-                Kommende gudstjenester
+                Gudstjenester & oppgaveplan
               </h3>
               <p className="text-xs text-slate-500">
-                Se og juster bemanningsbehov, tildel personer og overvåk svarstatus.
+                Oversikt over oppgaver per gudstjeneste. Tildel personer, send forespørsler og bekreft status direkte i listen.
               </p>
             </div>
             <button
               onClick={() => setNewServiceModal(true)}
-              className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>Ny gudstjeneste</span>
@@ -507,215 +552,373 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
           <div className="space-y-6">
             {db.gudstjenester.map((gudstjeneste) => {
+              const aktiveRoller = db.roller.filter((r) => r.Aktiv);
+
+              // Beregn total bemanningsdekning
+              let totaltBehov = 0;
+              let totaltTildelt = 0;
+
+              aktiveRoller.forEach((rolle) => {
+                const effBehov = getEffektivtBehov(
+                  gudstjeneste.GudstjenesteID,
+                  rolle,
+                  db.tjenestebehov
+                );
+                totaltBehov += effBehov;
+
+                const tildelinger = db.tildelinger.filter(
+                  (t) =>
+                    t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
+                    t.RolleID === rolle.RolleID
+                );
+                const aktiveTildelinger = tildelinger.filter((t) => {
+                  const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+                  return !svar || svar.Svar !== "Avvist";
+                });
+                totaltTildelt += aktiveTildelinger.length;
+              });
+
+              const erFullBemannet = totaltTildelt >= totaltBehov && totaltBehov > 0;
+
+              // Format dato
+              const parsedDate = new Date(`${gudstjeneste.Dato}T12:00:00`);
+              const datoTekst = !isNaN(parsedDate.getTime())
+                ? parsedDate.toLocaleDateString("nb-NO", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })
+                : gudstjeneste.Dato;
+
               return (
                 <div
                   key={gudstjeneste.GudstjenesteID}
-                  className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4"
+                  className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
                 >
-                  {/* Gudstjeneste Header */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                    <div>
-                      <div className="flex items-center gap-2">
+                  {/* Gudstjeneste Header (Mal som på Min side) */}
+                  <div className="bg-slate-50/80 px-4 sm:px-6 py-3.5 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap text-slate-800 text-xs sm:text-sm">
                         <span className="bg-[#eef5f1] text-[#2d5a3f] text-xs font-mono font-bold px-2 py-0.5 rounded border border-[#d2e8d9]">
                           {gudstjeneste.GudstjenesteID}
                         </span>
-                        <span className="text-xs font-semibold text-slate-500">
-                          {new Date(gudstjeneste.Dato).toLocaleDateString("no-NO", {
-                            weekday: "long",
-                            day: "numeric",
-                            month: "long",
-                            year: "numeric",
-                          })}{" "}
-                          &bull; kl. {gudstjeneste.Tid}
+                        <span className="font-semibold text-[#2d5a3f]">
+                          {datoTekst}
+                          {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
                         </span>
+                        <span className="font-bold text-slate-900">
+                          · {gudstjeneste.Tema || "Gudstjeneste"}
+                        </span>
+                        {gudstjeneste.Sted && (
+                          <span className="text-slate-500">
+                            · {gudstjeneste.Sted}
+                          </span>
+                        )}
                       </div>
-                      <h4 className="text-lg font-bold text-slate-900 mt-1">
-                        {gudstjeneste.Tema}
-                      </h4>
-                      {gudstjeneste.Bibeltekst && (
-                        <p className="text-xs text-slate-500">
-                          Bibeltekst: {gudstjeneste.Bibeltekst}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right text-xs text-slate-500">
-                      <div>{gudstjeneste.Sted}</div>
-                      {gudstjeneste.Kollekt && (
-                        <div className="text-[#2d5a3f] font-medium">
-                          Kollekt: {gudstjeneste.Kollekt}
+
+                      {(gudstjeneste.Bibeltekst || gudstjeneste.Kollekt) && (
+                        <div className="flex items-center gap-3 text-xs text-slate-600 flex-wrap">
+                          {gudstjeneste.Bibeltekst && (
+                            <span>
+                              Bibeltekst: <span className="font-medium text-slate-800">{gudstjeneste.Bibeltekst}</span>
+                            </span>
+                          )}
+                          {gudstjeneste.Kollekt && (
+                            <span>
+                              Kollekt: <span className="font-medium text-[#2d5a3f]">{gudstjeneste.Kollekt}</span>
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
+
+                    {/* Bemanningsdekning badge */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                          erFullBemannet
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                            : "bg-amber-50 text-amber-900 border-amber-200"
+                        }`}
+                      >
+                        {totaltTildelt} / {totaltBehov} tildelt
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Rollegitter */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {db.roller
-                      .filter((r) => r.Aktiv)
-                      .map((rolle) => {
-                        const effektivtBehov = getEffektivtBehov(
-                          gudstjeneste.GudstjenesteID,
-                          rolle,
-                          db.tjenestebehov
-                        );
+                  {/* Listeform over oppgaver med ekstra admin-kolonne */}
+                  <div className="divide-y divide-slate-100">
+                    {/* Header for tabell på desktop */}
+                    <div className="hidden lg:grid grid-cols-12 gap-3 px-5 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50/50">
+                      <div className="col-span-3">Rolle & Behov</div>
+                      <div className="col-span-4">Tildelte personer (Min side status)</div>
+                      <div className="col-span-5 text-right">Admin-handlinger (Bekreft ja / Forespør / Tildel)</div>
+                    </div>
 
-                        const isOverridden = db.tjenestebehov.some(
-                          (tb) =>
-                            tb.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                            tb.RolleID === rolle.RolleID &&
-                            tb.Aktiv
-                        );
+                    {aktiveRoller.map((rolle) => {
+                      const effektivtBehov = getEffektivtBehov(
+                        gudstjeneste.GudstjenesteID,
+                        rolle,
+                        db.tjenestebehov
+                      );
 
-                        const tildelinger = db.tildelinger.filter(
-                          (t) =>
-                            t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                            t.RolleID === rolle.RolleID
-                        );
+                      const isOverridden = db.tjenestebehov.some(
+                        (tb) =>
+                          tb.GudstjenesteID === gudstjeneste.GudstjenesteID &&
+                          tb.RolleID === rolle.RolleID &&
+                          tb.Aktiv
+                      );
 
-                        const aktiveTildelinger = tildelinger.filter((t) => {
-                          const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                          return !svar || svar.Svar !== "Avvist";
-                        });
+                      const tildelinger = db.tildelinger.filter(
+                        (t) =>
+                          t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
+                          t.RolleID === rolle.RolleID
+                      );
 
-                        const antallTildelt = aktiveTildelinger.length;
-                        const ledigePlasser = Math.max(0, effektivtBehov - antallTildelt);
-                        const erFull = ledigePlasser === 0;
+                      const aktiveTildelinger = tildelinger.filter((t) => {
+                        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+                        return !svar || svar.Svar !== "Avvist";
+                      });
 
-                        return (
-                          <div
-                            key={rolle.RolleID}
-                            className={`p-3.5 rounded-xl border flex flex-col justify-between ${
-                              erFull
-                                ? "bg-slate-50/60 border-slate-200"
-                                : "bg-amber-50/40 border-amber-200"
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="font-bold text-xs text-slate-900">
+                      const antallTildelt = aktiveTildelinger.length;
+                      const erFull = antallTildelt >= effektivtBehov;
+
+                      return (
+                        <div
+                          key={rolle.RolleID}
+                          className="px-4 sm:px-5 py-3 hover:bg-slate-50/70 transition flex flex-col lg:grid lg:grid-cols-12 gap-3 lg:items-center"
+                        >
+                          {/* 1. Rolle & Behov */}
+                          <div className="lg:col-span-3 flex items-center gap-3">
+                            <RolleIkon rollenavn={rolle.Rollenavn} />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
                                   {rolle.Rollenavn}
                                 </span>
-                                <div className="flex items-center gap-1">
-                                  <span
-                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                      erFull
-                                        ? "bg-emerald-100 text-emerald-800"
-                                        : "bg-amber-100 text-amber-900"
-                                    }`}
-                                  >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditNeedModal({
+                                      gudstjenesteId: gudstjeneste.GudstjenesteID,
+                                      rolleId: rolle.RolleID,
+                                      currentBehov: effektivtBehov,
+                                      rolleNavn: rolle.Rollenavn,
+                                    });
+                                    setCustomNeedInput(effektivtBehov);
+                                  }}
+                                  title="Overstyr/juster antall som trengs"
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition ${
+                                    erFull
+                                      ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                                      : "bg-amber-100 text-amber-900 hover:bg-amber-200"
+                                  }`}
+                                >
+                                  <span>
                                     {antallTildelt} / {effektivtBehov}
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setEditNeedModal({
-                                        gudstjenesteId: gudstjeneste.GudstjenesteID,
-                                        rolleId: rolle.RolleID,
-                                        currentBehov: effektivtBehov,
-                                        rolleNavn: rolle.Rollenavn,
-                                      });
-                                      setCustomNeedInput(effektivtBehov);
-                                    }}
-                                    title="Overstyr rollebehov"
-                                    className="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200 cursor-pointer"
-                                  >
-                                    <Sliders className="w-3 h-3" />
-                                  </button>
-                                </div>
+                                  <Sliders className="w-2.5 h-2.5 opacity-60" />
+                                </button>
                               </div>
-
-                              {isOverridden && (
-                                <span className="text-[10px] text-[#2d5a3f] bg-[#eef5f1] border border-[#d2e8d9] px-1.5 py-0.5 rounded block mb-2 w-fit">
-                                  Overstyrt rollebehov (Std: {rolle.Behov})
-                                </span>
-                              )}
-
-                              {/* Tildelte personer */}
-                              <div className="space-y-1.5 my-2">
-                                {tildelinger.length === 0 ? (
-                                  <span className="text-xs text-slate-400 italic block">
-                                    Ingen tildelt
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedRolleForModal(rolle)}
+                                  className="text-[10px] text-slate-400 hover:text-slate-700 underline cursor-pointer"
+                                >
+                                  Instruks
+                                </button>
+                                {isOverridden && (
+                                  <span className="text-[9px] text-[#2d5a3f] bg-[#eef5f1] border border-[#d2e8d9] px-1 rounded">
+                                    Std: {rolle.Behov}
                                   </span>
-                                ) : (
-                                  tildelinger.map((t) => {
-                                    const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
-                                    const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                                    const svarStatus = svar?.Svar || "Venter";
-
-                                    return (
-                                      <div
-                                        key={t.TildelingID}
-                                        className="flex items-center justify-between text-xs bg-white p-1.5 rounded-lg border border-slate-200 shadow-2xs"
-                                      >
-                                        <div className="truncate mr-1.5">
-                                          <span className="font-medium text-slate-900 block truncate">
-                                            {p?.Navn || t.PersonID}
-                                          </span>
-                                        </div>
-
-                                        <div className="flex items-center gap-1 shrink-0">
-                                          {svarStatus === "Bekreftet" && (
-                                            <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded flex items-center gap-0.5">
-                                              <CheckCircle2 className="w-3 h-3" />
-                                              Bekreftet
-                                            </span>
-                                          )}
-                                          {svarStatus === "Avvist" && (
-                                            <span className="text-[10px] text-rose-700 font-bold bg-rose-50 px-1.5 py-0.5 rounded flex items-center gap-0.5">
-                                              <XCircle className="w-3 h-3" />
-                                              Forfall
-                                            </span>
-                                          )}
-                                          {svarStatus === "Venter" && (
-                                            <span className="text-[10px] text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded flex items-center gap-0.5">
-                                              <HelpCircle className="w-3 h-3" />
-                                              Venter
-                                            </span>
-                                          )}
-
-                                          <button
-                                            type="button"
-                                            onClick={() => handleRemoveTildeling(t.TildelingID)}
-                                            title="Fjern tildeling"
-                                            className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50 cursor-pointer ml-1"
-                                          >
-                                            <Trash2 className="w-3 h-3" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    );
-                                  })
                                 )}
                               </div>
                             </div>
-
-                            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedRolleForModal(rolle)}
-                                className="text-[11px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
-                              >
-                                Instruks
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setAssignModal({
-                                    gudstjenesteId: gudstjeneste.GudstjenesteID,
-                                    rolleId: rolle.RolleID,
-                                    rolleNavn: rolle.Rollenavn,
-                                  })
-                                }
-                                className="px-2 py-1 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] rounded-md text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-[#d2e8d9]"
-                              >
-                                <Plus className="w-3 h-3" />
-                                <span>Tildel</span>
-                              </button>
-                            </div>
                           </div>
-                        );
-                      })}
+
+                          {/* 2. Tildelte personer (Mal fra Min side) */}
+                          <div className="lg:col-span-4 flex flex-wrap items-center gap-1.5">
+                            {tildelinger.length === 0 ? (
+                              <span className="text-xs text-slate-400 italic">
+                                Ingen tildelt
+                              </span>
+                            ) : (
+                              tildelinger.map((t) => {
+                                const p = db.personer.find(
+                                  (pers) => pers.PersonID === t.PersonID
+                                );
+                                const svar = db.svar.find(
+                                  (s) => s.TildelingID === t.TildelingID
+                                );
+                                const status = svar?.Svar || "Venter";
+                                const isBekreftet = status === "Bekreftet";
+                                const isAvvist = status === "Avvist";
+                                const isVenter = status === "Venter";
+
+                                return (
+                                  <div
+                                    key={t.TildelingID}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs border transition ${
+                                      isBekreftet
+                                        ? "bg-emerald-50/80 border-emerald-200 text-emerald-950 font-medium"
+                                        : isAvvist
+                                        ? "bg-rose-50/80 border-rose-200 text-rose-800 line-through opacity-75"
+                                        : "bg-amber-50/80 border-amber-200 text-amber-950 font-medium"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`w-2 h-2 rounded-full shrink-0 ${
+                                        isBekreftet
+                                          ? "bg-emerald-500 ring-2 ring-emerald-200"
+                                          : isAvvist
+                                          ? "bg-rose-500 ring-2 ring-rose-200"
+                                          : "bg-amber-400 ring-2 ring-amber-200"
+                                      }`}
+                                      title={
+                                        isBekreftet
+                                          ? "Bekreftet"
+                                          : isAvvist
+                                          ? "Meldt forfall / Kan ikke"
+                                          : "Forespurt (venter svar)"
+                                      }
+                                    />
+                                    <span>{p?.Navn || t.PersonID}</span>
+                                    <span className="text-[10px] text-slate-400 font-normal">
+                                      {isBekreftet
+                                        ? "(Ja)"
+                                        : isAvvist
+                                        ? "(Nei)"
+                                        : "(Venter)"}
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {/* 3. Ekstra kolonne for Admin-funksjonaliteter */}
+                          <div className="lg:col-span-5 flex flex-wrap items-center lg:justify-end gap-1.5 pt-1 lg:pt-0 border-t lg:border-t-0 border-slate-100">
+                            {/* Handlinger per tildelt person */}
+                            {tildelinger.map((t) => {
+                              const p = db.personer.find(
+                                (pers) => pers.PersonID === t.PersonID
+                              );
+                              const svar = db.svar.find(
+                                (s) => s.TildelingID === t.TildelingID
+                              );
+                              const status = svar?.Svar || "Venter";
+                              const personKortnavn =
+                                p?.Fornavn || p?.Navn?.split(" ")[0] || t.PersonID;
+
+                              return (
+                                <div
+                                  key={`admin-action-${t.TildelingID}`}
+                                  className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs text-[11px]"
+                                >
+                                  <span
+                                    className="font-semibold text-slate-700 max-w-[80px] truncate px-1"
+                                    title={p?.Navn || t.PersonID}
+                                  >
+                                    {personKortnavn}:
+                                  </span>
+
+                                  {/* Bekreft ja */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdatePersonStatus(
+                                        t.TildelingID,
+                                        t.PersonID,
+                                        "Bekreftet"
+                                      )
+                                    }
+                                    title="Bekreft (personen har sagt ja)"
+                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
+                                      status === "Bekreftet"
+                                        ? "bg-emerald-600 text-white shadow-2xs"
+                                        : "bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-800"
+                                    }`}
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    <span>Bekreft</span>
+                                  </button>
+
+                                  {/* Forespurt / Venter */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdatePersonStatus(
+                                        t.TildelingID,
+                                        t.PersonID,
+                                        "Venter"
+                                      )
+                                    }
+                                    title="Sett status til forespurt / venter svar"
+                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
+                                      status === "Venter"
+                                        ? "bg-amber-500 text-white shadow-2xs"
+                                        : "bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-800"
+                                    }`}
+                                  >
+                                    <Clock className="w-3 h-3" />
+                                    <span>Forespør</span>
+                                  </button>
+
+                                  {/* Forfall / Kan ikke */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdatePersonStatus(
+                                        t.TildelingID,
+                                        t.PersonID,
+                                        "Avvist"
+                                      )
+                                    }
+                                    title="Marker som forfall / kan ikke"
+                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
+                                      status === "Avvist"
+                                        ? "bg-rose-600 text-white shadow-2xs"
+                                        : "bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-800"
+                                    }`}
+                                  >
+                                    <X className="w-3 h-3" />
+                                    <span>Forfall</span>
+                                  </button>
+
+                                  {/* Fjern tildeling */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveTildeling(t.TildelingID)}
+                                    title="Fjern tildeling"
+                                    className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50 cursor-pointer ml-0.5"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+
+                            {/* Knapp for å tildele ny person */}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAssignModal({
+                                  gudstjenesteId: gudstjeneste.GudstjenesteID,
+                                  rolleId: rolle.RolleID,
+                                  rolleNavn: rolle.Rollenavn,
+                                })
+                              }
+                              className="px-2.5 py-1 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition shadow-2xs shrink-0"
+                            >
+                              <UserPlus className="w-3.5 h-3.5" />
+                              <span>+ Tildel</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -1328,6 +1531,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
             })}
           </div>
         </div>
+      )}
+
+      {/* FANE 5: GOOGLE SHEETS & SYNKKONTROLL */}
+      {activeTab === "sync" && (
+        <GoogleSheetsSync db={db} onUpdateDb={onUpdateDb} />
       )}
 
       {/* MODAL: Ny Gudstjeneste */}

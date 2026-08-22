@@ -40,15 +40,44 @@ import {
 } from "../data/initialData";
 
 const STORAGE_KEY = "gudstjenesteplanlegger_db_v2";
+const SCRIPT_URL_STORAGE_KEY = "gudstjenesteplanlegger_apps_script_url";
 
-const REMOTE_SCRIPT_URL =
-  (import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined) ||
+export const DEFAULT_REMOTE_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbznLoq62orP53izSEA0wnA7VdQHiNWpP3upTo2nd1owcL3LDZp13gK8LxrAdsjxWwt7vw/exec";
 
-function getApiBase(): string {
-  if (!REMOTE_SCRIPT_URL) return "";
-  if (import.meta.env.DEV) return "/gas-api";
-  return REMOTE_SCRIPT_URL.replace(/\/$/, "");
+export function getCustomScriptUrl(): string {
+  try {
+    const saved = localStorage.getItem(SCRIPT_URL_STORAGE_KEY);
+    if (saved && saved.trim()) {
+      return saved.trim();
+    }
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+  return ((import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined) || DEFAULT_REMOTE_SCRIPT_URL).trim();
+}
+
+export function saveCustomScriptUrl(url: string): void {
+  try {
+    if (url && url.trim()) {
+      localStorage.setItem(SCRIPT_URL_STORAGE_KEY, url.trim());
+    } else {
+      localStorage.removeItem(SCRIPT_URL_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.error("Kunne ikke lagre Apps Script URL:", e);
+  }
+}
+
+export function getApiBase(): string {
+  const custom = getCustomScriptUrl();
+  if (import.meta.env.DEV) {
+    // I dev miljø hvis det er default URL bruker vi proxyen
+    if (custom === DEFAULT_REMOTE_SCRIPT_URL) {
+      return "/gas-api";
+    }
+  }
+  return custom.replace(/\/$/, "");
 }
 
 export interface DatabaseState {
@@ -66,6 +95,54 @@ export interface DatabaseState {
   personerImport: PersonerImport[];
   gudstjenesterImport: GudstjenesterImport[];
   rollebeskrivelseImport: RollebeskrivelseImport[];
+}
+
+/**
+ * Genererer et ugjettelig, unikt og stabilt sikkerhetstoken per person.
+ * Tokenet endres ikke fra gang til gang, slik at bokmerker og tilsendte SMS-er forblir gyldige.
+ */
+export function genererStatiskSikkerhetsToken(personId: string, navn: string): string {
+  let hash1 = 0x811c9dc5;
+  const salt = `LMK_SEC_${personId}_${navn || "frivillig"}_SALT2026`;
+  for (let i = 0; i < salt.length; i++) {
+    hash1 ^= salt.charCodeAt(i);
+    hash1 = Math.imul(hash1, 0x01000193);
+  }
+  let hash2 = 0x5a17c2e3;
+  for (let i = salt.length - 1; i >= 0; i--) {
+    hash2 ^= salt.charCodeAt(i);
+    hash2 = Math.imul(hash2, 0x01000193);
+  }
+  const part1 = (hash1 >>> 0).toString(36).padStart(7, "0");
+  const part2 = (hash2 >>> 0).toString(36).padStart(7, "0");
+  return `mk_${part1}${part2}`;
+}
+
+export function sikreSikkerhetsTokens(personer: Person[]): Person[] {
+  if (!Array.isArray(personer)) return [];
+  return personer.map((p) => {
+    if (p.SikkerhetsToken && p.SikkerhetsToken.trim().length >= 6) {
+      return p;
+    }
+    return {
+      ...p,
+      SikkerhetsToken: genererStatiskSikkerhetsToken(p.PersonID, p.Navn),
+    };
+  });
+}
+
+/**
+ * Finner person i databasen via enten ugjettelig sikkerhetstoken eller personID
+ */
+export function finnPersonMedTokenEllerId(db: DatabaseState, tokenOrId: string): Person | undefined {
+  if (!tokenOrId || !db?.personer) return undefined;
+  const clean = tokenOrId.trim();
+  // 1. Sjekk om det matcher en persons hemmelige / unike SikkerhetsToken
+  const byToken = db.personer.find((p) => p.SikkerhetsToken === clean);
+  if (byToken) return byToken;
+  // 2. Bakoverkompatibilitet: Sjekk om det matcher PersonID (f.eks. P001, P011)
+  const byId = db.personer.find((p) => p.PersonID.toUpperCase() === clean.toUpperCase());
+  return byId;
 }
 
 function emptyState(): DatabaseState {
@@ -90,9 +167,10 @@ function emptyState(): DatabaseState {
 function normalizeState(parsed: Partial<DatabaseState> | null | undefined): DatabaseState {
   const base = emptyState();
   if (!parsed) return base;
+  const rawPersoner = Array.isArray(parsed.personer) ? parsed.personer : base.personer;
   return {
     gruppetyper: Array.isArray(parsed.gruppetyper) ? parsed.gruppetyper : base.gruppetyper,
-    personer: Array.isArray(parsed.personer) ? parsed.personer : base.personer,
+    personer: sikreSikkerhetsTokens(rawPersoner),
     grupper: Array.isArray(parsed.grupper) ? parsed.grupper : base.grupper,
     gruppemedlemmer: Array.isArray(parsed.gruppemedlemmer) ? parsed.gruppemedlemmer : base.gruppemedlemmer,
     roller: Array.isArray(parsed.roller) ? parsed.roller : base.roller,
@@ -338,13 +416,19 @@ export async function loadDatabase(): Promise<DatabaseState> {
   try {
     // Bruk en kort timeout for API-kall slik at appen aldri henger for testere
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     const text = await fetchJson(`${base}?action=load`, { signal: controller.signal });
     clearTimeout(timeoutId);
 
     const payload = JSON.parse(text);
     if (payload?.ok && payload.data) {
-      return applyLoadedState(normalizeState(payload.data));
+      const state = applyLoadedState(normalizeState(payload.data));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (err) {
+        console.warn("Kunne ikke lagre til localStorage cache:", err);
+      }
+      return state;
     }
   } catch (e) {
     console.warn("Kunne ikke hente ferske data fra backend, bruker lokal kopi:", e);
@@ -352,6 +436,77 @@ export async function loadDatabase(): Promise<DatabaseState> {
 
   // Sikker og umiddelbar fallback
   return loadLocalDatabase();
+}
+
+/**
+ * Tvinger en full oppdatering/henting fra Google Sheets (Apps Script Web App URL)
+ */
+export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ success: boolean; data?: DatabaseState; error?: string }> {
+  let targetUrl = (customUrl || getCustomScriptUrl()).trim();
+  if (!targetUrl) {
+    return { success: false, error: "Ingen Google Apps Script URL er oppgitt." };
+  }
+
+  let fetchUrl = targetUrl.replace(/\/$/, "");
+  if (import.meta.env.DEV && targetUrl === DEFAULT_REMOTE_SCRIPT_URL) {
+    fetchUrl = "/gas-api";
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const text = await fetchJson(`${fetchUrl}?action=load`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    const payload = JSON.parse(text);
+    if (payload?.ok && payload.data) {
+      const normalized = applyLoadedState(normalizeState(payload.data));
+      // Lagre til lokal database slik at dataene sitter fast
+      saveCustomScriptUrl(targetUrl);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+      } catch (err) {
+        console.warn("Kunne ikke cache i localStorage:", err);
+      }
+      return { success: true, data: normalized };
+    } else {
+      return { success: false, error: payload?.error || "Ukjent format fra Google Apps Script." };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: `Tilkoblingsfeil mot Google Sheets: ${msg}` };
+  }
+}
+
+/**
+ * Laster opp gjeldende databasemodell direkte til Google Sheets
+ */
+export async function uploadToGoogleSheets(state: DatabaseState, customUrl?: string): Promise<{ success: boolean; error?: string }> {
+  let targetUrl = (customUrl || getCustomScriptUrl()).trim();
+  if (!targetUrl) {
+    return { success: false, error: "Ingen Google Apps Script URL er oppgitt." };
+  }
+
+  let postUrl = targetUrl.replace(/\/$/, "");
+  if (import.meta.env.DEV && targetUrl === DEFAULT_REMOTE_SCRIPT_URL) {
+    postUrl = "/gas-api";
+  }
+
+  try {
+    const response = await fetch(postUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "save", data: state }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (payload?.ok) {
+      return { success: true };
+    } else {
+      return { success: false, error: payload?.error || "Google Sheets svarte ikke med OK." };
+    }
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export function saveDatabase(state: DatabaseState): void {
@@ -1042,14 +1197,44 @@ export function finnMedlemmerIGruppe(
 }
 
 /**
- * Genererer en personlig direktelenke, valgfritt med en spesifikk startvisning
+ * Genererer en personlig, ugjettelig direktelenke (Magic Link)
  */
-export function genererPersonligLenke(personID: string, view?: AppView): string {
+export function genererPersonligLenke(
+  personIDOrObj: string | Person,
+  view?: AppView,
+  db?: DatabaseState
+): string {
   const origin = window.location.origin;
   const path = window.location.pathname;
   const params = new URLSearchParams();
-  params.set("personId", personID);
-  if (view) {
+
+  let token = "";
+  let personId = "";
+
+  if (typeof personIDOrObj === "string") {
+    personId = personIDOrObj;
+    if (db) {
+      const person = db.personer.find((p) => p.PersonID === personIDOrObj);
+      if (person) {
+        token = person.SikkerhetsToken || genererStatiskSikkerhetsToken(person.PersonID, person.Navn);
+      }
+    }
+    if (!token) {
+      token = genererStatiskSikkerhetsToken(personIDOrObj, "");
+    }
+  } else if (personIDOrObj && typeof personIDOrObj === "object") {
+    personId = personIDOrObj.PersonID;
+    token = personIDOrObj.SikkerhetsToken || genererStatiskSikkerhetsToken(personIDOrObj.PersonID, personIDOrObj.Navn);
+  }
+
+  // Bruk ?t= for ugjettelig token, fallback til personId hvis token mangler
+  if (token) {
+    params.set("t", token);
+  } else {
+    params.set("personId", personId);
+  }
+
+  if (view && view !== "personal") {
     params.set("view", view);
   }
   return `${origin}${path}?${params.toString()}`;

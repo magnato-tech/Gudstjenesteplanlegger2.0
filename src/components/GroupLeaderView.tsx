@@ -108,7 +108,7 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
   const currentGruppe = db.grupper.find((g) => g.GruppeID === activeGruppeId);
 
   const handleCopyLink = (targetPersonId: string) => {
-    const link = genererPersonligLenke(targetPersonId);
+    const link = genererPersonligLenke(targetPersonId, undefined, db);
     navigator.clipboard.writeText(link).then(() => {
       setCopiedPersonId(targetPersonId);
       setTimeout(() => setCopiedPersonId(null), 2500);

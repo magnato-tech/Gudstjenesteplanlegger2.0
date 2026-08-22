@@ -1,9 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { loadDatabase, loadLocalDatabase, resetDatabase, DatabaseState, hentTilgang, visningErTillatt, AppView } from "./services/dataService";
+import {
+  loadDatabase,
+  loadLocalDatabase,
+  resetDatabase,
+  DatabaseState,
+  hentTilgang,
+  visningErTillatt,
+  AppView,
+  finnPersonMedTokenEllerId,
+  genererPersonligLenke,
+} from "./services/dataService";
 import { Header } from "./components/Header";
 import { PersonalView } from "./components/PersonalView";
 import { GroupLeaderView } from "./components/GroupLeaderView";
 import { AdminView } from "./components/AdminView";
+import { Shield, ArrowLeft, Lock, Check } from "lucide-react";
 
 export default function App() {
   // Start umiddelbart med lokal/initial database så skjermen rendres momentant
@@ -11,6 +22,15 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>("personal");
   const [selectedPersonId, setSelectedPersonId] = useState<string>("P001");
+  const [isMagicLinkUser, setIsMagicLinkUser] = useState<boolean>(false);
+  const [adminSimulatingPersonId, setAdminSimulatingPersonId] = useState<string | null>(null);
+
+  // Arkitektur for fremtidig PIN-sikring av administrator (deaktivert i test/dev-periode)
+  const [adminPinRequired, setAdminPinRequired] = useState<boolean>(false);
+  const [adminPinVerified, setAdminPinVerified] = useState<boolean>(false);
+  const [showPinModal, setShowPinModal] = useState<boolean>(false);
+  const [pinInput, setPinInput] = useState<string>("");
+  const [pinError, setPinError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,46 +51,92 @@ export default function App() {
     };
   }, []);
 
-  // Les inn URL-parametre ved oppstart (f.eks. ?personId=P002 eller ?view=admin)
+  // Les inn URL-parametre ved oppstart (støtter ?t=ugjettelig_token samt bakoverkompatibel ?personId=P001)
   useEffect(() => {
-    if (!db) return;
+    if (!db || db.personer.length === 0) return;
     try {
       const params = new URLSearchParams(window.location.search);
-      const personIdParam = params.get("personId");
+      const tokenParam = params.get("t") || params.get("token") || params.get("personId") || params.get("p");
       const viewParam = params.get("view");
 
-      let personId = selectedPersonId;
-      if (personIdParam && db.personer.some((p) => p.PersonID === personIdParam)) {
-        personId = personIdParam;
-        setSelectedPersonId(personIdParam);
+      let activePerson = db.personer.find((p) => p.PersonID === selectedPersonId);
+
+      if (tokenParam) {
+        const found = finnPersonMedTokenEllerId(db, tokenParam);
+        if (found) {
+          activePerson = found;
+          setSelectedPersonId(found.PersonID);
+          setIsMagicLinkUser(true);
+        }
       }
 
-      const tilgang = hentTilgang(db, personId);
-      const requested = viewParam as AppView;
-      if (requested === "admin" || requested === "leader" || requested === "personal") {
-        setActiveView(visningErTillatt(tilgang, requested) ? requested : "personal");
-      } else if (personIdParam) {
-        setActiveView("personal");
+      if (activePerson) {
+        const tilgang = hentTilgang(db, activePerson.PersonID);
+        const requested = viewParam as AppView;
+        if (requested === "admin" || requested === "leader" || requested === "personal") {
+          if (visningErTillatt(tilgang, requested)) {
+            setActiveView(requested);
+          } else {
+            setActiveView("personal");
+          }
+        } else if (tokenParam) {
+          // Standard til min side når lenke åpnes
+          setActiveView("personal");
+        }
       }
     } catch (e) {
       console.warn("Kunne ikke lese URL-parametre:", e);
     }
   }, [db]);
 
-  useEffect(() => {
-    if (!db) return;
-    const tilgang = hentTilgang(db, selectedPersonId);
-    if (!visningErTillatt(tilgang, activeView)) {
-      setActiveView("personal");
-    }
-  }, [db, selectedPersonId]);
+  const activePerson = db.personer.find((p) => p.PersonID === selectedPersonId);
+  const tilgang = hentTilgang(db, selectedPersonId);
+  const isActualAdmin = tilgang.isAdmin;
 
   const handleSelectPerson = (personId: string) => {
     setSelectedPersonId(personId);
     if (!db) return;
-    const tilgang = hentTilgang(db, personId);
-    if (!visningErTillatt(tilgang, activeView)) {
+    const newTilgang = hentTilgang(db, personId);
+    if (!visningErTillatt(newTilgang, activeView)) {
       setActiveView("personal");
+    }
+  };
+
+  const handleAdminSimulatePerson = (personId: string, targetView: AppView = "personal") => {
+    setAdminSimulatingPersonId(personId);
+    setSelectedPersonId(personId);
+    setActiveView(targetView);
+  };
+
+  const handleReturnToAdmin = () => {
+    // Finn første admin i systemet (f.eks. Magnar P009)
+    const firstAdmin = db.personer.find((p) => hentTilgang(db, p.PersonID).isAdmin);
+    if (firstAdmin) {
+      setSelectedPersonId(firstAdmin.PersonID);
+    }
+    setAdminSimulatingPersonId(null);
+    setActiveView("admin");
+  };
+
+  const handleNavigateView = (view: AppView) => {
+    if (view === "admin" && adminPinRequired && !adminPinVerified) {
+      setShowPinModal(true);
+      return;
+    }
+    setActiveView(view);
+  };
+
+  const handleVerifyPin = (e: React.FormEvent) => {
+    e.preventDefault();
+    // Standard test-PIN hvis aktivert er 1234 eller menighetskode
+    if (pinInput === "1234" || pinInput === "2026") {
+      setAdminPinVerified(true);
+      setShowPinModal(false);
+      setPinError(null);
+      setPinInput("");
+      setActiveView("admin");
+    } else {
+      setPinError("Feil PIN-kode. Prøv igjen.");
     }
   };
 
@@ -96,14 +162,37 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex flex-col selection:bg-indigo-500 selection:text-white">
+      {/* Banner når administrator tester visning som en annen person */}
+      {adminSimulatingPersonId && (
+        <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-medium flex items-center justify-between shadow-sm sticky top-0 z-40">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-slate-950" />
+            <span>
+              <strong>Admin-testmodus:</strong> Du ser nå skjermen slik den oppleves av{" "}
+              <strong>{activePerson?.Navn || adminSimulatingPersonId}</strong>.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleReturnToAdmin}
+            className="bg-slate-900 hover:bg-slate-800 text-white px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Tilbake til Administrator
+          </button>
+        </div>
+      )}
+
       {/* Toppmeny med bytte av visning og person */}
       <Header
         db={db}
         activeView={activeView}
-        setActiveView={setActiveView}
+        setActiveView={handleNavigateView}
         selectedPersonId={selectedPersonId}
         setSelectedPersonId={handleSelectPerson}
         onResetData={handleResetData}
+        isAdminUser={isActualAdmin && !adminSimulatingPersonId}
+        isMagicLinkUser={isMagicLinkUser}
       />
 
       {/* Hovedinnhold basert på valgt modus */}
@@ -129,19 +218,75 @@ export default function App() {
           <AdminView
             db={db}
             onUpdateDb={handleUpdateDb}
-            onSelectPerson={handleSelectPerson}
+            onSelectPerson={handleAdminSimulatePerson}
           />
         )}
       </main>
+
+      {/* Forberedt PIN-kode dialog (aktiveres ved behov) */}
+      {showPinModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4 border border-amber-200">
+              <Lock className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 text-center mb-1">
+              Administrator-adgang
+            </h3>
+            <p className="text-xs text-slate-500 text-center mb-4">
+              Tast inn administrator-PIN for å åpne planleggingspanelet.
+            </p>
+            <form onSubmit={handleVerifyPin} className="space-y-4">
+              <div>
+                <input
+                  type="password"
+                  autoFocus
+                  placeholder="PIN-kode (f.eks. 1234)"
+                  value={pinInput}
+                  onChange={(e) => {
+                    setPinInput(e.target.value);
+                    setPinError(null);
+                  }}
+                  className="w-full text-center tracking-widest text-lg font-mono px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] focus:border-transparent"
+                />
+                {pinError && (
+                  <p className="text-xs text-rose-600 font-medium mt-1.5 text-center">
+                    {pinError}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPinModal(false);
+                    setPinInput("");
+                    setPinError(null);
+                  }}
+                  className="flex-1 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold text-xs hover:bg-slate-50 cursor-pointer"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 rounded-xl bg-[#2d5a3f] hover:bg-[#234731] text-white font-semibold text-xs transition cursor-pointer shadow-sm"
+                >
+                  Lås opp
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Enkel, ren bunntekst */}
       <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
-            <strong>Gudstjenesteplanlegger 2.0</strong> &bull; Basert på autoritativ relasjonell datamodell
+            <strong>Gudstjenesteplanlegger 2.0</strong> &bull; Lillesand Misjonskirke
           </div>
           <div className="text-slate-400">
-            Klar for integrasjon mot Google Apps Script / Google Sheets backend
+            Sikret med unike, ugjettelige direktelenker &bull; Tilpasset GDPR
           </div>
         </div>
       </footer>

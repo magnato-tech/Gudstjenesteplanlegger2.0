@@ -1,0 +1,227 @@
+import React, { useState, useEffect } from "react";
+import {
+  DatabaseState,
+  getCustomScriptUrl,
+  saveCustomScriptUrl,
+  forceSyncFromGoogleSheets,
+  uploadToGoogleSheets,
+  DEFAULT_REMOTE_SCRIPT_URL,
+} from "../services/dataService";
+import {
+  RefreshCw,
+  UploadCloud,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Save,
+  Link,
+  Layers,
+  Database,
+  FileSpreadsheet,
+} from "lucide-react";
+
+interface GoogleSheetsSyncProps {
+  db: DatabaseState;
+  onUpdateDb: (updatedDb: DatabaseState) => void;
+}
+
+export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
+  db,
+  onUpdateDb,
+}) => {
+  const [scriptUrl, setScriptUrl] = useState<string>("");
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "success" | "error" | "info";
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setScriptUrl(getCustomScriptUrl());
+  }, []);
+
+  const handleSaveUrl = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    saveCustomScriptUrl(scriptUrl);
+    setStatusMessage({
+      type: "info",
+      text: "Nettadressen til Google Apps Script er lagret.",
+    });
+    setTimeout(() => setStatusMessage(null), 4000);
+  };
+
+  const handleSyncFromSheets = async () => {
+    setIsLoading(true);
+    setStatusMessage({
+      type: "info",
+      text: "Kontakter Google Sheets og henter nyeste data...",
+    });
+
+    const res = await forceSyncFromGoogleSheets(scriptUrl);
+    setIsLoading(false);
+
+    if (res.success && res.data) {
+      onUpdateDb(res.data);
+      setStatusMessage({
+        type: "success",
+        text: `Vellykket! Hentet ${res.data.personer.length} personer, ${res.data.gudstjenester.length} gudstjenester og ${res.data.grupper.length} grupper fra Google Sheets.`,
+      });
+    } else {
+      setStatusMessage({
+        type: "error",
+        text: res.error || "Kunne ikke hente data fra Google Sheets.",
+      });
+    }
+  };
+
+  const handleUploadToSheets = async () => {
+    if (!window.confirm("Er du sikker på at du vil overskrive dataene i Google Sheets med gjeldende data fra appen?")) {
+      return;
+    }
+    setIsUploading(true);
+    setStatusMessage({
+      type: "info",
+      text: "Laster opp gjeldende endringer til Google Sheets...",
+    });
+
+    const res = await uploadToGoogleSheets(db, scriptUrl);
+    setIsUploading(false);
+
+    if (res.success) {
+      setStatusMessage({
+        type: "success",
+        text: "Dataene ble lagret og oppdatert i Google Sheets!",
+      });
+    } else {
+      setStatusMessage({
+        type: "error",
+        text: res.error || "Kunne ikke lagre til Google Sheets.",
+      });
+    }
+  };
+
+  const isUsingDefault = scriptUrl === DEFAULT_REMOTE_SCRIPT_URL;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center">
+            <FileSpreadsheet className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">
+              Google Sheets Integrasjon & Synkronisering
+            </h2>
+            <p className="text-xs text-slate-500">
+              Her kan du hente ferske data direkte fra Google Regnearket eller overstyre tilkoblingslenken.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={isLoading || isUploading}
+            onClick={handleSyncFromSheets}
+            className="px-4 py-2.5 bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+            <span>{isLoading ? "Henter fra Google Sheets..." : "Hent / Synk fra Google Sheets nå"}</span>
+          </button>
+        </div>
+      </div>
+
+      {statusMessage && (
+        <div
+          className={`p-4 rounded-xl text-xs flex items-start gap-2.5 ${
+            statusMessage.type === "success"
+              ? "bg-emerald-50 text-emerald-900 border border-emerald-200"
+              : statusMessage.type === "error"
+              ? "bg-rose-50 text-rose-900 border border-rose-200"
+              : "bg-blue-50 text-blue-900 border border-blue-200"
+          }`}
+        >
+          {statusMessage.type === "success" && (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          )}
+          {statusMessage.type === "error" && (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          )}
+          {statusMessage.type === "info" && (
+            <RefreshCw className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+          )}
+          <span className="font-medium">{statusMessage.text}</span>
+        </div>
+      )}
+
+      {/* Oppsett av Apps Script Web App URL */}
+      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Link className="w-4 h-4 text-slate-600" />
+            <h3 className="text-sm font-bold text-slate-800">
+              Google Apps Script Web App URL
+            </h3>
+          </div>
+          {isUsingDefault && (
+            <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-medium border border-emerald-200">
+              Aktiv standard-URL for menigheten
+            </span>
+          )}
+        </div>
+
+        <form onSubmit={handleSaveUrl} className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Web App URL (slutter normalt på <code>/exec</code>):
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={scriptUrl}
+                onChange={(e) => setScriptUrl(e.target.value)}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                className="flex-1 px-3.5 py-2.5 text-xs font-mono bg-white rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Lagre URL</span>
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <div className="text-[11px] text-slate-500 space-y-1">
+          <p>
+            <strong>Tips:</strong> Denne lenken knytter appen direkte til Google Regnearket. Når du åpner appen fra et nytt domene eller en ny enhet, trykker du bare på <strong>«Hent / Synk fra Google Sheets nå»</strong> for å laste inn alle menighetens data.
+          </p>
+        </div>
+      </div>
+
+      {/* Datastatistikk nå */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-white border border-slate-200 p-4 rounded-xl">
+          <div className="text-xs text-slate-500 font-medium">Personer i minne</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">{db.personer.length}</div>
+        </div>
+        <div className="bg-white border border-slate-200 p-4 rounded-xl">
+          <div className="text-xs text-slate-500 font-medium">Gudstjenester</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">{db.gudstjenester.length}</div>
+        </div>
+        <div className="bg-white border border-slate-200 p-4 rounded-xl">
+          <div className="text-xs text-slate-500 font-medium">Grupper</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">{db.grupper.length}</div>
+        </div>
+        <div className="bg-white border border-slate-200 p-4 rounded-xl">
+          <div className="text-xs text-slate-500 font-medium">Tildelinger & Svar</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">{db.tildelinger.length}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
