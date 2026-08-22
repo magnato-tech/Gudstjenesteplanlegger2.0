@@ -103,7 +103,8 @@ export default function App() {
       });
   };
 
-  // Les inn URL-parametre ved oppstart (støtter ?t=ugjettelig_token samt bakoverkompatibel ?personId=P001)
+  // Uten magic link: åpne som administrator (egen innlogging kommer senere).
+  // ?t= / ?token= / ?personId= / ?p= er personlige lenker → Min side for den personen.
   useEffect(() => {
     if (!db || db.personer.length === 0) return;
     try {
@@ -111,30 +112,31 @@ export default function App() {
       const tokenParam = params.get("t") || params.get("token") || params.get("personId") || params.get("p");
       const viewParam = params.get("view");
 
-      let activePerson = db.personer.find((p) => p.PersonID === selectedPersonId);
+      const velgVisning = (personId: string, defaultView: AppView) => {
+        const tilgang = hentTilgang(db, personId);
+        const requested = viewParam as AppView;
+        if (requested === "admin" || requested === "leader" || requested === "personal") {
+          setActiveView(visningErTillatt(tilgang, requested) ? requested : defaultView);
+        } else {
+          setActiveView(defaultView);
+        }
+      };
 
       if (tokenParam) {
         const found = finnPersonMedTokenEllerId(db, tokenParam);
         if (found) {
-          activePerson = found;
           setSelectedPersonId(found.PersonID);
           setIsMagicLinkUser(true);
+          velgVisning(found.PersonID, "personal");
+          return;
         }
       }
 
-      if (activePerson) {
-        const tilgang = hentTilgang(db, activePerson.PersonID);
-        const requested = viewParam as AppView;
-        if (requested === "admin" || requested === "leader" || requested === "personal") {
-          if (visningErTillatt(tilgang, requested)) {
-            setActiveView(requested);
-          } else {
-            setActiveView("personal");
-          }
-        } else if (tokenParam) {
-          // Standard til min side når lenke åpnes
-          setActiveView("personal");
-        }
+      const forsteAdmin = db.personer.find((p) => hentTilgang(db, p.PersonID).isAdmin);
+      if (forsteAdmin) {
+        setSelectedPersonId(forsteAdmin.PersonID);
+        setIsMagicLinkUser(false);
+        velgVisning(forsteAdmin.PersonID, "admin");
       }
     } catch (e) {
       console.warn("Kunne ikke lese URL-parametre:", e);
