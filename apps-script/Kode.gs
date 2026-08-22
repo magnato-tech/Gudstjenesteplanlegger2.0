@@ -80,7 +80,7 @@ var MASTER_SHEETS = {
   },
   tildelinger: {
     name: "Tildelinger",
-    columns: ["TildelingID", "GudstjenesteID", "RolleID", "PersonID", "OpprettetDato", "SistEndret"],
+    columns: ["TildelingID", "GudstjenesteID", "RolleID", "PersonID", "EksternNavn", "OpprettetDato", "SistEndret"],
   },
   svar: {
     name: "Svar",

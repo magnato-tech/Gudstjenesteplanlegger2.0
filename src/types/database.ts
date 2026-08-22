@@ -115,7 +115,8 @@ export interface Tildeling {
   TildelingID: string; // e.g. "T001"
   GudstjenesteID: string; // Ref: Gudstjenester.GudstjenesteID
   RolleID: string; // Ref: Roller.RolleID
-  PersonID: string; // Ref: Personer.PersonID
+  PersonID: string; // Ref: Personer.PersonID, eller EXT… for gjest
+  EksternNavn?: string; // Gjest: visningsnavn, ikke i Personer
   OpprettetDato: string;
   SistEndret: string;
 }

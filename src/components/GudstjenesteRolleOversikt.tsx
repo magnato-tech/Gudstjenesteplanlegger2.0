@@ -15,6 +15,7 @@ export type RolleOversiktPerson = {
   tildelingId: string;
   navn: string;
   status: "Bekreftet" | "Venter" | "Avvist";
+  ekstern: boolean;
 };
 
 export function personerIRolle(
@@ -27,7 +28,7 @@ export function personerIRolle(
     .map((t) => {
       const svar = hentSvarStatus(db, t.TildelingID);
       const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
-      const navn = p?.Fornavn || p?.Navn;
+      const navn = t.EksternNavn || p?.Fornavn || p?.Navn;
       if (!navn) return null;
       const status: RolleOversiktPerson["status"] =
         svar === "Bekreftet" ? "Bekreftet" : svar === "Avvist" ? "Avvist" : "Venter";
@@ -36,7 +37,8 @@ export function personerIRolle(
         tildelingId: t.TildelingID,
         navn,
         status,
-      };
+        ekstern: Boolean(t.EksternNavn) || /^EXT/i.test(t.PersonID || ""),
+      } satisfies RolleOversiktPerson;
     })
     .filter((x): x is RolleOversiktPerson => x !== null);
 }
@@ -56,6 +58,11 @@ export function RolleOversiktNavn({ person }: { person: RolleOversiktPerson }) {
       <span className={avvist ? "line-through opacity-75 text-rose-800" : undefined}>
         {person.navn}
       </span>
+      {person.ekstern ? (
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+          Ekstern
+        </span>
+      ) : null}
     </span>
   );
 }

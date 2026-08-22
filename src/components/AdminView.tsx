@@ -15,12 +15,15 @@ import {
   saveDatabase,
   hentTilgang,
   svarPaaTildeling,
+  settDeltakelseForPerson,
+  personHarAktivTildeling,
+  finnPersonMedVisningsnavn,
+  tildelingVisningsnavn,
   AppView,
 } from "../services/dataService";
 import {
   Rolle,
   Gudstjeneste,
-  Tildeling,
   Tjenestebehov,
   SvarStatus,
 } from "../types/database";
@@ -374,6 +377,23 @@ export const AdminView: React.FC<AdminViewProps> = ({
     if (!assignModal) return;
     const fornavn = assignNewFornavn.trim();
     if (!fornavn) return;
+    const eksisterende = finnPersonMedVisningsnavn(db, fornavn);
+    if (eksisterende) {
+      const updated = settDeltakelseForPerson(
+        db,
+        eksisterende.PersonID,
+        assignModal.gudstjenesteId,
+        assignModal.rolleId,
+        "Avventer",
+        "Forespurt av administrator"
+      );
+      saveDatabase(updated);
+      onUpdateDb(updated);
+      setAssignModal(null);
+      setPersonToAssign("");
+      setAssignNewFornavn("");
+      return;
+    }
     const gud = db.gudstjenester.find((g) => g.GudstjenesteID === assignModal.gudstjenesteId);
     const updatedDb = opprettPersonIRegister(db, { Navn: fornavn }, [
       {
@@ -443,36 +463,28 @@ export const AdminView: React.FC<AdminViewProps> = ({
   // 4. Manuell Tildeling
   const handleAssignPerson = () => {
     if (!assignModal || !personToAssign) return;
-
-    const maxTildelingNr = db.tildelinger.reduce((max, t) => {
-      const num = parseInt(t.TildelingID.replace(/\D/g, ""), 10);
-      return !isNaN(num) && num > max ? num : max;
-    }, 0);
-    const newTildelingID = `T${String(maxTildelingNr + 1).padStart(3, "0")}`;
-
-    const now = new Date().toISOString().split("T")[0];
-    const nyTildeling: Tildeling = {
-      TildelingID: newTildelingID,
-      GudstjenesteID: assignModal.gudstjenesteId,
-      RolleID: assignModal.rolleId,
-      PersonID: personToAssign,
-      OpprettetDato: now,
-      SistEndret: now,
-    };
-
-    const updatedDb = svarPaaTildeling(
-      {
-        ...db,
-        tildelinger: [...db.tildelinger, nyTildeling],
-      },
-      newTildelingID,
+    if (
+      personHarAktivTildeling(
+        db,
+        personToAssign,
+        assignModal.gudstjenesteId,
+        assignModal.rolleId
+      )
+    ) {
+      setAssignModal(null);
+      setPersonToAssign("");
+      return;
+    }
+    const updated = settDeltakelseForPerson(
+      db,
       personToAssign,
-      "Venter",
+      assignModal.gudstjenesteId,
+      assignModal.rolleId,
+      "Avventer",
       "Forespurt av administrator"
     );
-
-    saveDatabase(updatedDb);
-    onUpdateDb(updatedDb);
+    saveDatabase(updated);
+    onUpdateDb(updated);
     setAssignModal(null);
     setPersonToAssign("");
   };
@@ -744,7 +756,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
             const status = hentSvarStatus(db, t.TildelingID);
             const isBekreftet = status === "Bekreftet";
             const isAvvist = status === "Avvist";
-            const visningsnavn = p?.Fornavn || p?.Navn || "Ukjent";
+            const visningsnavn = tildelingVisningsnavn(db, t);
             return (
               <div
                 key={t.TildelingID}
@@ -774,6 +786,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 >
                   {visningsnavn}
                 </span>
+                {t.EksternNavn ? (
+                  <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+                    Ekstern
+                  </span>
+                ) : null}
                 <IkonHandling
                   label="Bekreft (personen har sagt ja)"
                   Icon={Check}
@@ -2115,6 +2132,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           pr.Aktiv
                       )
                     )
+                    .filter(
+                      (p) =>
+                        !personHarAktivTildeling(
+                          db,
+                          p.PersonID,
+                          assignModal.gudstjenesteId,
+                          assignModal.rolleId
+                        )
+                    )
                     .map((p) => (
                       <option key={p.PersonID} value={p.PersonID}>
                         {p.Navn}
@@ -2130,6 +2156,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             pr.PersonID === p.PersonID &&
                             pr.RolleID === assignModal.rolleId &&
                             pr.Aktiv
+                        )
+                    )
+                    .filter(
+                      (p) =>
+                        !personHarAktivTildeling(
+                          db,
+                          p.PersonID,
+                          assignModal.gudstjenesteId,
+                          assignModal.rolleId
                         )
                     )
                     .map((p) => (

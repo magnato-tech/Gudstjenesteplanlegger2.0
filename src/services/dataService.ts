@@ -56,7 +56,7 @@ let sessionMockOverride = false;
 let devDataSource: DevDataSource | null = null;
 
 export function getDevDataSource(): DevDataSource {
-  if (import.meta.env.PROD) return "remote";
+  if (import.meta.env?.PROD) return "remote";
   if (devDataSource) return devDataSource;
   try {
     const saved = localStorage.getItem(DEV_SOURCE_KEY);
@@ -67,12 +67,12 @@ export function getDevDataSource(): DevDataSource {
   } catch {
     // Ignore
   }
-  devDataSource = import.meta.env.VITE_USE_REMOTE_DATA === "true" ? "remote" : "mock";
+  devDataSource = import.meta.env?.VITE_USE_REMOTE_DATA === "true" ? "remote" : "mock";
   return devDataSource;
 }
 
 export function setDevDataSource(source: DevDataSource): void {
-  if (import.meta.env.PROD) return;
+  if (import.meta.env?.PROD) return;
   devDataSource = source;
   sessionMockOverride = false;
   try {
@@ -99,7 +99,7 @@ function persistLocalState(state: DatabaseState): void {
  * Utvikling: admin-valget (localStorage), ellers mock som standard.
  */
 export function useRemoteData(): boolean {
-  if (import.meta.env.PROD) return true;
+  if (import.meta.env?.PROD) return true;
   return getDevDataSource() === "remote";
 }
 
@@ -312,6 +312,45 @@ function korrigerLydBildeTilRigg(state: DatabaseState): {
   return { state: endret ? { ...state, roller } : state, endret };
 }
 
+function svarRang(db: DatabaseState, tildelingId: string): number {
+  const svar = hentSvarStatus(db, tildelingId);
+  if (svar === "Bekreftet") return 2;
+  if (svar === "Venter") return 1;
+  return 0;
+}
+
+/** Én person skal bare ha én tildeling per rolle per gudstjeneste. */
+function fjernDuplikateTildelinger(state: DatabaseState): {
+  state: DatabaseState;
+  endret: boolean;
+} {
+  const behold = new Map<string, string>();
+  const fjern = new Set<string>();
+  for (const t of state.tildelinger) {
+    const nokkel = `${t.GudstjenesteID}|${t.RolleID}|${t.PersonID}`;
+    const forrige = behold.get(nokkel);
+    if (!forrige) {
+      behold.set(nokkel, t.TildelingID);
+      continue;
+    }
+    if (svarRang(state, t.TildelingID) > svarRang(state, forrige)) {
+      fjern.add(forrige);
+      behold.set(nokkel, t.TildelingID);
+    } else {
+      fjern.add(t.TildelingID);
+    }
+  }
+  if (fjern.size === 0) return { state, endret: false };
+  return {
+    state: {
+      ...state,
+      tildelinger: state.tildelinger.filter((t) => !fjern.has(t.TildelingID)),
+      svar: state.svar.filter((s) => !fjern.has(s.TildelingID)),
+    },
+    endret: true,
+  };
+}
+
 export function loadLocalDatabase(): DatabaseState {
   try {
     const saved = localStorage.getItem(MOCK_STORAGE_KEY);
@@ -391,6 +430,9 @@ async function fetchJson(url: string, init?: RequestInit): Promise<string> {
 
 function applyLoadedState(state: DatabaseState): DatabaseState {
   let { state: fixed, endret } = korrigerLydBildeTilRigg(state);
+  const duplikat = fjernDuplikateTildelinger(fixed);
+  fixed = duplikat.state;
+  if (duplikat.endret) endret = true;
 
   // Finn Astrid / Astri i persondatabasen
   const astrid = fixed.personer.find(
@@ -734,6 +776,19 @@ export function getEffektivtBehov(
 
 export function hentSvarStatus(db: DatabaseState, tildelingId: string): SvarStatus {
   return db.svar.find((s) => s.TildelingID === tildelingId)?.Svar || "Venter";
+}
+
+export function erEksternPersonId(personId: string): boolean {
+  return /^EXT\d+$/i.test(personId || "");
+}
+
+export function tildelingVisningsnavn(
+  db: DatabaseState,
+  t: { PersonID: string; EksternNavn?: string }
+): string {
+  if (t.EksternNavn) return t.EksternNavn;
+  const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
+  return p?.Fornavn || p?.Navn || "Ukjent";
 }
 
 export type Bemanningstall = {
@@ -1199,6 +1254,62 @@ export function settDeltakelseForPerson(
   return updatedDb;
 }
 
+function nesteEksternPersonId(tildelinger: Tildeling[]): string {
+  const max = tildelinger.reduce((acc, t) => {
+    const m = /^EXT(\d+)$/i.exec(t.PersonID || "");
+    if (!m) return acc;
+    const n = parseInt(m[1], 10);
+    return !isNaN(n) && n > acc ? n : acc;
+  }, 0);
+  return `EXT${String(max + 1).padStart(3, "0")}`;
+}
+
+/** Gjest på én gudstjeneste. Skrives ikke til Personer. */
+export function tildelEksternPerson(
+  db: DatabaseState,
+  gudstjenesteId: string,
+  rolleId: string,
+  navn: string,
+  kommentar?: string
+): DatabaseState {
+  const visningsnavn = navn.trim();
+  if (!visningsnavn) return db;
+  const nøkkel = visningsnavn.toLowerCase();
+  const allerede = db.tildelinger.find(
+    (t) =>
+      t.GudstjenesteID === gudstjenesteId &&
+      t.RolleID === rolleId &&
+      (t.EksternNavn || "").trim().toLowerCase() === nøkkel &&
+      hentSvarStatus(db, t.TildelingID) !== "Avvist"
+  );
+  if (allerede) return db;
+
+  const now = new Date().toISOString().split("T")[0];
+  const personId = nesteEksternPersonId(db.tildelinger);
+  const tildelingId = nesteNummerertId(db.tildelinger, "TildelingID", "T");
+  const nyTildeling: Tildeling = {
+    TildelingID: tildelingId,
+    GudstjenesteID: gudstjenesteId,
+    RolleID: rolleId,
+    PersonID: personId,
+    EksternNavn: visningsnavn,
+    OpprettetDato: now,
+    SistEndret: now,
+  };
+  const utenSave: DatabaseState = {
+    ...db,
+    tildelinger: [...db.tildelinger, nyTildeling],
+  };
+  return settDeltakelseForPerson(
+    utenSave,
+    personId,
+    gudstjenesteId,
+    rolleId,
+    "Avventer",
+    kommentar || "Ekstern person (ikke i menighetsregisteret)"
+  );
+}
+
 /**
  * Gruppeleder-hjelpefunksjoner:
  * Finner grupper der personen er registrert som GruppelederID, NestlederID
@@ -1576,6 +1687,46 @@ export function splittVisningsnavn(raw: string): { Navn: string; Fornavn: string
   const etternavn = parts[parts.length - 1];
   const fornavn = parts.slice(0, -1).join(" ");
   return { Navn: `${fornavn} ${etternavn}`.trim(), Fornavn: fornavn, Etternavn: etternavn };
+}
+
+export function personHarAktivTildeling(
+  db: DatabaseState,
+  personId: string,
+  gudstjenesteId: string,
+  rolleId: string
+): boolean {
+  return db.tildelinger.some(
+    (t) =>
+      t.GudstjenesteID === gudstjenesteId &&
+      t.RolleID === rolleId &&
+      t.PersonID === personId &&
+      hentSvarStatus(db, t.TildelingID) !== "Avvist"
+  );
+}
+
+/** Unikt navnetreff — brukes for å unngå ny person med samme visningsnavn. */
+export function finnPersonMedVisningsnavn(
+  db: DatabaseState,
+  raw: string
+): { PersonID: string; Navn: string; Fornavn: string; Etternavn: string } | undefined {
+  const n = splittVisningsnavn(raw);
+  const full = n.Navn.toLowerCase();
+  const aktive = db.personer.filter((p) => p.Aktiv !== false);
+  const eksakt = aktive.filter((p) => (p.Navn || "").trim().toLowerCase() === full);
+  if (eksakt.length === 1) return eksakt[0];
+  if (n.Etternavn) {
+    const begge = aktive.filter(
+      (p) =>
+        (p.Fornavn || "").trim().toLowerCase() === n.Fornavn.toLowerCase() &&
+        (p.Etternavn || "").trim().toLowerCase() === n.Etternavn.toLowerCase()
+    );
+    if (begge.length === 1) return begge[0];
+  }
+  const kunFornavn = aktive.filter(
+    (p) => (p.Fornavn || "").trim().toLowerCase() === n.Fornavn.toLowerCase()
+  );
+  if (kunFornavn.length === 1) return kunFornavn[0];
+  return undefined;
 }
 
 /** Opprett person. Etternavn lagres bare hvis navnet har mer enn ett ord. */

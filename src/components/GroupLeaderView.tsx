@@ -13,6 +13,8 @@ import {
   genererPersonligLenke,
   saveDatabase,
   settDeltakelseForPerson,
+  tildelEksternPerson,
+  erEksternPersonId,
   sikreGruppemedlemskap,
   AppView,
 } from "../services/dataService";
@@ -147,6 +149,8 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
     rolleNavn: string;
     gudstjenesteDato: string;
   } | null>(null);
+  const [assignSok, setAssignSok] = useState("");
+  const [eksternForesporsel, setEksternForesporsel] = useState<string | null>(null);
   const [medlemSok, setMedlemSok] = useState("");
   const [valgtMenighetsmedlem, setValgtMenighetsmedlem] = useState<Person | null>(null);
   const [redigerMin, setRedigerMin] = useState<string | null>(null);
@@ -235,7 +239,26 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
       "Forespurt av gruppeleder"
     );
     onUpdateDb(updated);
-    handleCopyLink(personId);
+    if (!erEksternPersonId(personId)) {
+      handleCopyLink(personId);
+    }
+    setAssignSok("");
+    setEksternForesporsel(null);
+    setAssignModal(null);
+  };
+
+  const handleAssignEkstern = () => {
+    if (!assignModal || !eksternForesporsel) return;
+    const updated = tildelEksternPerson(
+      db,
+      assignModal.gudstjenesteId,
+      assignModal.rolleId,
+      eksternForesporsel,
+      "Ekstern person (ikke i menighetsregisteret)"
+    );
+    onUpdateDb(updated);
+    setAssignSok("");
+    setEksternForesporsel(null);
     setAssignModal(null);
   };
 
@@ -475,13 +498,16 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
           ? "border-l-[3px] border-l-amber-400"
           : "border-l-[3px] border-l-emerald-400";
 
-    const åpneSettOpp = (rolle: Rolle) =>
+    const åpneSettOpp = (rolle: Rolle) => {
+      setAssignSok("");
+      setEksternForesporsel(null);
       setAssignModal({
         gudstjenesteId: gudstjeneste.GudstjenesteID,
         rolleId: rolle.RolleID,
         rolleNavn: rolle.Rollenavn,
         gudstjenesteDato: gudstjeneste.Dato,
       });
+    };
 
     return (
       <div
@@ -1005,57 +1031,155 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
             <p className="text-xs text-slate-500 mb-3">
               {formatDato(assignModal.gudstjenesteDato)}
             </p>
-            {(() => {
-              const opptatt = new Set(
-                db.tildelinger
-                  .filter(
-                    (t) =>
-                      t.GudstjenesteID === assignModal.gudstjenesteId &&
-                      t.RolleID === assignModal.rolleId
-                  )
-                  .filter((t) => {
-                    return hentSvarStatus(db, t.TildelingID) !== "Avvist";
-                  })
-                  .map((t) => t.PersonID)
-              );
-              const ledige = oversiktPersoner
-                .filter((p) => !opptatt.has(p.PersonID))
-                .slice()
-                .sort((a, b) =>
-                  (a.Fornavn || a.Navn).localeCompare(b.Fornavn || b.Navn, "nb")
-                );
-              if (ledige.length === 0) {
-                return (
-                  <p className="text-sm text-slate-500">
-                    Alle i gruppen er allerede satt opp denne dagen.
-                  </p>
-                );
-              }
-              return (
-                <ul className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
-                  {ledige.map((p) => (
-                    <li key={p.PersonID}>
-                      <button
-                        type="button"
-                        onClick={() => handleAssignPerson(p.PersonID)}
-                        className="w-full text-left px-4 py-3 text-sm font-medium text-slate-900 hover:bg-[#eef5f1] cursor-pointer"
-                      >
-                        {p.Fornavn || p.Navn}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              );
-            })()}
-            <div className="flex justify-end mt-4">
-              <button
-                type="button"
-                onClick={() => setAssignModal(null)}
-                className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                Avbryt
-              </button>
-            </div>
+            {eksternForesporsel ? (
+              <div className="space-y-3">
+                <p className="text-sm text-slate-700">
+                  <strong>{eksternForesporsel}</strong> finnes ikke i personregisteret.
+                  Vil du sette personen opp som ekstern på denne gudstjenesten?
+                </p>
+                <p className="text-xs text-slate-500">
+                  Eksterne lagres ikke i menighetens personregister.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEksternForesporsel(null)}
+                    className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-xl cursor-pointer"
+                  >
+                    Nei
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAssignEkstern}
+                    className="px-4 py-2 text-sm bg-[#2d5a3f] hover:bg-[#234731] text-white font-semibold rounded-xl cursor-pointer"
+                  >
+                    Ja, ekstern person
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {(() => {
+                  const opptatt = new Set(
+                    db.tildelinger
+                      .filter(
+                        (t) =>
+                          t.GudstjenesteID === assignModal.gudstjenesteId &&
+                          t.RolleID === assignModal.rolleId &&
+                          hentSvarStatus(db, t.TildelingID) !== "Avvist"
+                      )
+                      .map((t) => t.PersonID)
+                  );
+                  const q = assignSok.trim().toLowerCase();
+                  const treffer = (p: Person) => {
+                    if (!q) return true;
+                    const navn = `${p.Fornavn || ""} ${p.Etternavn || ""} ${p.Navn || ""}`.toLowerCase();
+                    return navn.includes(q);
+                  };
+                  const iGruppen = oversiktPersoner
+                    .filter((p) => !opptatt.has(p.PersonID) && treffer(p))
+                    .slice()
+                    .sort((a, b) =>
+                      (a.Fornavn || a.Navn).localeCompare(b.Fornavn || b.Navn, "nb")
+                    );
+                  const gruppeIds = new Set(oversiktPersoner.map((p) => p.PersonID));
+                  const iMenigheten = q
+                    ? db.personer
+                        .filter(
+                          (p) =>
+                            p.Aktiv !== false &&
+                            !gruppeIds.has(p.PersonID) &&
+                            !opptatt.has(p.PersonID) &&
+                            treffer(p)
+                        )
+                        .slice()
+                        .sort((a, b) =>
+                          (a.Fornavn || a.Navn).localeCompare(b.Fornavn || b.Navn, "nb")
+                        )
+                        .slice(0, 12)
+                    : [];
+                  const ingenTreff = q.length > 0 && iGruppen.length === 0 && iMenigheten.length === 0;
+                  return (
+                    <>
+                      <div className="relative mb-3">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="search"
+                          value={assignSok}
+                          onChange={(e) => setAssignSok(e.target.value)}
+                          placeholder="Søk i gruppen eller menigheten…"
+                          autoFocus
+                          className="w-full text-sm border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+                        />
+                      </div>
+                      <div className="max-h-64 overflow-y-auto space-y-3">
+                        <ul className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                          {iGruppen.length === 0 ? (
+                            <li className="px-4 py-3 text-sm text-slate-500">
+                              {q ? "Ingen i gruppen matcher." : "Ingen ledige i gruppen."}
+                            </li>
+                          ) : (
+                            iGruppen.map((p) => (
+                              <li key={p.PersonID}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignPerson(p.PersonID)}
+                                  className="w-full text-left px-4 py-3 text-sm font-medium text-slate-900 hover:bg-[#eef5f1] cursor-pointer"
+                                >
+                                  {p.Fornavn || p.Navn}
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                        {iMenigheten.length > 0 && (
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1 px-1">
+                              Fra menigheten
+                            </p>
+                            <ul className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                              {iMenigheten.map((p) => (
+                                <li key={p.PersonID}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAssignPerson(p.PersonID)}
+                                    className="w-full text-left px-4 py-3 text-sm font-medium text-slate-900 hover:bg-[#eef5f1] cursor-pointer"
+                                  >
+                                    {p.Navn || `${p.Fornavn} ${p.Etternavn}`.trim()}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {ingenTreff && (
+                          <button
+                            type="button"
+                            onClick={() => setEksternForesporsel(assignSok.trim())}
+                            className="w-full text-left px-4 py-3 text-sm border border-dashed border-slate-200 rounded-xl text-[#2d5a3f] font-semibold hover:bg-[#eef5f1] cursor-pointer"
+                          >
+                            Legge til «{assignSok.trim()}» som ekstern person?
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+                <div className="flex justify-end mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignSok("");
+                      setEksternForesporsel(null);
+                      setAssignModal(null);
+                    }}
+                    className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                  >
+                    Avbryt
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
