@@ -45,6 +45,38 @@ const SCRIPT_URL_STORAGE_KEY = "gudstjenesteplanlegger_apps_script_url";
 export const DEFAULT_REMOTE_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbznLoq62orP53izSEA0wnA7VdQHiNWpP3upTo2nd1owcL3LDZp13gK8LxrAdsjxWwt7vw/exec";
 
+/** Timeout mot Google Apps Script (dev+remote og produksjon). */
+export const REMOTE_FETCH_TIMEOUT_MS = 15_000;
+
+let sessionMockOverride = false;
+
+/**
+ * Produksjon bruker alltid Google Sheets.
+ * Utvikling bruker mock med mindre VITE_USE_REMOTE_DATA=true.
+ */
+export function useRemoteData(): boolean {
+  if (import.meta.env.PROD) return true;
+  return import.meta.env.VITE_USE_REMOTE_DATA === "true";
+}
+
+/** Dev-only: etter feilet Sheets-kall kan utvikler velge mock for denne økten. */
+export function enableSessionMockOverride(): void {
+  sessionMockOverride = true;
+}
+
+export function clearSessionMockOverride(): void {
+  sessionMockOverride = false;
+}
+
+export function isSessionMockOverride(): boolean {
+  return sessionMockOverride;
+}
+
+/** True når lagring/opplasting mot arket er tillatt. Mock og session-override skriver aldri til Sheets. */
+export function shouldWriteToRemote(): boolean {
+  return useRemoteData() && !sessionMockOverride;
+}
+
 export function getCustomScriptUrl(): string {
   try {
     const saved = localStorage.getItem(SCRIPT_URL_STORAGE_KEY);
@@ -292,12 +324,18 @@ export function loadLocalDatabase(): DatabaseState {
 async function fetchJson(url: string, init?: RequestInit): Promise<string> {
   let lastError = "";
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (init?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     try {
       const response = await fetch(url, init);
       const text = await response.text();
       if (text.trim()) return text;
       lastError = "Tomt svar fra Google Sheets.";
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        throw e;
+      }
       lastError = e instanceof Error ? e.message : String(e);
     }
     await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
@@ -407,19 +445,19 @@ function applyLoadedState(state: DatabaseState): DatabaseState {
 }
 
 export async function loadDatabase(): Promise<DatabaseState> {
-  const base = getApiBase();
-  if (!base) {
-    const local = loadLocalDatabase();
-    return local;
+  if (!useRemoteData() || sessionMockOverride) {
+    return loadLocalDatabase();
   }
 
-  try {
-    // Bruk en kort timeout for API-kall slik at appen aldri henger for testere
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const text = await fetchJson(`${base}?action=load`, { signal: controller.signal });
-    clearTimeout(timeoutId);
+  const base = getApiBase();
+  if (!base) {
+    throw new Error("Mangler Google Apps Script URL. Sett VITE_APPS_SCRIPT_URL.");
+  }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REMOTE_FETCH_TIMEOUT_MS);
+  try {
+    const text = await fetchJson(`${base}?action=load`, { signal: controller.signal });
     const payload = JSON.parse(text);
     if (payload?.ok && payload.data) {
       const state = applyLoadedState(normalizeState(payload.data));
@@ -430,18 +468,33 @@ export async function loadDatabase(): Promise<DatabaseState> {
       }
       return state;
     }
+    throw new Error(payload?.error || "Ukjent svar fra Google Sheets.");
   } catch (e) {
-    console.warn("Kunne ikke hente ferske data fra backend, bruker lokal kopi:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(
+        `Tidsavbrudd mot Google Sheets etter ${REMOTE_FETCH_TIMEOUT_MS / 1000} sekunder. Prøv igjen.`
+      );
+    }
+    throw new Error(msg || "Kunne ikke nå Google Sheets.");
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  // Sikker og umiddelbar fallback
-  return loadLocalDatabase();
 }
 
 /**
  * Tvinger en full oppdatering/henting fra Google Sheets (Apps Script Web App URL)
  */
 export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ success: boolean; data?: DatabaseState; error?: string }> {
+  if (!useRemoteData() || sessionMockOverride) {
+    return {
+      success: false,
+      error: sessionMockOverride
+        ? "Økten bruker mock-data. Last siden på nytt og hent fra Google Sheets."
+        : "Mock-modus er aktiv. Sett VITE_USE_REMOTE_DATA=true for å hente fra Google Sheets.",
+    };
+  }
+
   let targetUrl = (customUrl || getCustomScriptUrl()).trim();
   if (!targetUrl) {
     return { success: false, error: "Ingen Google Apps Script URL er oppgitt." };
@@ -454,7 +507,7 @@ export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ s
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => controller.abort(), REMOTE_FETCH_TIMEOUT_MS);
     const text = await fetchJson(`${fetchUrl}?action=load`, { signal: controller.signal });
     clearTimeout(timeoutId);
 
@@ -482,6 +535,13 @@ export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ s
  * Laster opp gjeldende databasemodell direkte til Google Sheets
  */
 export async function uploadToGoogleSheets(state: DatabaseState, customUrl?: string): Promise<{ success: boolean; error?: string }> {
+  if (!shouldWriteToRemote()) {
+    return {
+      success: false,
+      error: "Mock-data lastes ikke opp til Google Sheets. Aktiver VITE_USE_REMOTE_DATA=true og hent ekte data først.",
+    };
+  }
+
   let targetUrl = (customUrl || getCustomScriptUrl()).trim();
   if (!targetUrl) {
     return { success: false, error: "Ingen Google Apps Script URL er oppgitt." };
@@ -510,15 +570,18 @@ export async function uploadToGoogleSheets(state: DatabaseState, customUrl?: str
 }
 
 export function saveDatabase(state: DatabaseState): void {
-  const base = getApiBase();
-  if (!base) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {
-      console.error("Kunne ikke lagre til localStorage:", e);
-    }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error("Kunne ikke lagre til localStorage:", e);
+  }
+
+  if (!shouldWriteToRemote()) {
     return;
   }
+
+  const base = getApiBase();
+  if (!base) return;
 
   void fetch(base, {
     method: "POST",
@@ -535,10 +598,10 @@ export function saveDatabase(state: DatabaseState): void {
 }
 
 export async function resetDatabase(): Promise<DatabaseState> {
-  if (getApiBase()) {
-    return loadDatabase();
+  if (!shouldWriteToRemote()) {
+    localStorage.removeItem(STORAGE_KEY);
+    return loadLocalDatabase();
   }
-  localStorage.removeItem(STORAGE_KEY);
   return loadDatabase();
 }
 

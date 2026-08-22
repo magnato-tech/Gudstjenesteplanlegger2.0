@@ -6,6 +6,9 @@ import {
   forceSyncFromGoogleSheets,
   uploadToGoogleSheets,
   DEFAULT_REMOTE_SCRIPT_URL,
+  shouldWriteToRemote,
+  useRemoteData,
+  isSessionMockOverride,
 } from "../services/dataService";
 import {
   RefreshCw,
@@ -52,6 +55,13 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
   };
 
   const handleSyncFromSheets = async () => {
+    if (!shouldWriteToRemote()) {
+      setStatusMessage({
+        type: "error",
+        text: "Mock-modus er aktiv. Synk mot Google Sheets er slått av.",
+      });
+      return;
+    }
     setIsLoading(true);
     setStatusMessage({
       type: "info",
@@ -102,9 +112,18 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
   };
 
   const isUsingDefault = scriptUrl === DEFAULT_REMOTE_SCRIPT_URL;
+  const remoteEnabled = shouldWriteToRemote();
+  const mockLocked = !useRemoteData() || isSessionMockOverride();
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs space-y-6">
+      {mockLocked && (
+        <div className="p-4 rounded-xl bg-amber-50 text-amber-950 border border-amber-200 text-xs">
+          Appen kjører i mock-modus. Synk og opplasting mot Google Sheets er slått av.
+          For ekte data: sett <code>VITE_USE_REMOTE_DATA=true</code> i <code>.env</code> og start
+          <code> npm run dev</code> på nytt.
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center">
@@ -123,7 +142,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={isLoading || isUploading}
+            disabled={isLoading || isUploading || !remoteEnabled}
             onClick={handleSyncFromSheets}
             className="px-4 py-2.5 bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
           >

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   loadDatabase,
   loadLocalDatabase,
@@ -8,18 +8,24 @@ import {
   visningErTillatt,
   AppView,
   finnPersonMedTokenEllerId,
-  genererPersonligLenke,
+  useRemoteData,
+  enableSessionMockOverride,
+  clearSessionMockOverride,
 } from "./services/dataService";
 import { Header } from "./components/Header";
 import { PersonalView } from "./components/PersonalView";
 import { GroupLeaderView } from "./components/GroupLeaderView";
 import { AdminView } from "./components/AdminView";
-import { Shield, ArrowLeft, Lock, Check } from "lucide-react";
+import { Shield, ArrowLeft, Lock } from "lucide-react";
 
 export default function App() {
-  // Start umiddelbart med lokal/initial database så skjermen rendres momentant
-  const [db, setDb] = useState<DatabaseState>(() => loadLocalDatabase());
+  const remoteByConfig = useRemoteData();
+  const [db, setDb] = useState<DatabaseState | null>(() =>
+    remoteByConfig ? null : loadLocalDatabase()
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingRemote, setIsLoadingRemote] = useState<boolean>(remoteByConfig);
+  const [usingDevMockFallback, setUsingDevMockFallback] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("personal");
   const [selectedPersonId, setSelectedPersonId] = useState<string>("P001");
   const [isMagicLinkUser, setIsMagicLinkUser] = useState<boolean>(false);
@@ -32,24 +38,49 @@ export default function App() {
   const [pinInput, setPinInput] = useState<string>("");
   const [pinError, setPinError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchRemote = useCallback(() => {
     let cancelled = false;
+    setIsLoadingRemote(true);
+    setLoadError(null);
     loadDatabase()
       .then((loaded) => {
         if (!cancelled) {
           setDb(loaded);
           setLoadError(null);
+          setIsLoadingRemote(false);
         }
       })
       .catch((e) => {
         if (!cancelled) {
           setLoadError(e instanceof Error ? e.message : String(e));
+          setIsLoadingRemote(false);
         }
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!remoteByConfig) return;
+    return fetchRemote();
+  }, [remoteByConfig, fetchRemote]);
+
+  const handleRetryRemote = () => {
+    clearSessionMockOverride();
+    setUsingDevMockFallback(false);
+    setDb(null);
+    fetchRemote();
+  };
+
+  const handleUseMockFallback = () => {
+    if (import.meta.env.PROD) return;
+    enableSessionMockOverride();
+    setUsingDevMockFallback(true);
+    setLoadError(null);
+    setIsLoadingRemote(false);
+    setDb(loadLocalDatabase());
+  };
 
   // Les inn URL-parametre ved oppstart (støtter ?t=ugjettelig_token samt bakoverkompatibel ?personId=P001)
   useEffect(() => {
@@ -89,10 +120,6 @@ export default function App() {
     }
   }, [db]);
 
-  const activePerson = db.personer.find((p) => p.PersonID === selectedPersonId);
-  const tilgang = hentTilgang(db, selectedPersonId);
-  const isActualAdmin = tilgang.isAdmin;
-
   const handleSelectPerson = (personId: string) => {
     setSelectedPersonId(personId);
     if (!db) return;
@@ -109,7 +136,7 @@ export default function App() {
   };
 
   const handleReturnToAdmin = () => {
-    // Finn første admin i systemet (f.eks. Magnar P009)
+    if (!db) return;
     const firstAdmin = db.personer.find((p) => hentTilgang(db, p.PersonID).isAdmin);
     if (firstAdmin) {
       setSelectedPersonId(firstAdmin.PersonID);
@@ -152,16 +179,52 @@ export default function App() {
 
   if (!db) {
     return (
-      <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex items-center justify-center">
-        <p className="text-sm text-slate-600">
-          {loadError ? `Kunne ikke laste data: ${loadError}` : "Laster data fra menighetsarket …"}
-        </p>
+      <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-6 shadow-xs text-center space-y-4">
+          {loadError ? (
+            <>
+              <h2 className="text-lg font-bold text-slate-900">Kunne ikke laste menighetsarket</h2>
+              <p className="text-sm text-slate-600">{loadError}</p>
+              <div className="flex flex-col sm:flex-row gap-2 justify-center">
+                <button
+                  type="button"
+                  onClick={handleRetryRemote}
+                  className="px-4 py-2 rounded-xl bg-[#2d5a3f] hover:bg-[#234731] text-white text-sm font-semibold cursor-pointer"
+                >
+                  Prøv igjen
+                </button>
+                {import.meta.env.DEV && (
+                  <button
+                    type="button"
+                    onClick={handleUseMockFallback}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 cursor-pointer"
+                  >
+                    Bruk mock-data
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-slate-600">
+              {isLoadingRemote ? "Laster data fra menighetsarket …" : "Laster …"}
+            </p>
+          )}
+        </div>
       </div>
     );
   }
 
+  const activePerson = db.personer.find((p) => p.PersonID === selectedPersonId);
+  const tilgang = hentTilgang(db, selectedPersonId);
+  const isActualAdmin = tilgang.isAdmin;
+
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex flex-col selection:bg-indigo-500 selection:text-white">
+      {usingDevMockFallback && (
+        <div className="bg-amber-100 text-amber-950 px-4 py-2 text-xs font-medium text-center border-b border-amber-200">
+          Utvikling: viser mock-data for denne økten. Endringer skrives ikke til Google Sheets.
+        </div>
+      )}
       {/* Banner når administrator tester visning som en annen person */}
       {adminSimulatingPersonId && (
         <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-medium flex items-center justify-between shadow-sm sticky top-0 z-40">
