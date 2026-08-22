@@ -695,10 +695,11 @@ export const GroupLeaderView: React.FC<GroupLeaderViewProps> = ({
                         type="button"
                         onClick={() => åpneSettOpp(rolle)}
                         data-guide="sett-opp"
-                        className="px-2.5 py-1 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md text-xs font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                        className="p-1.5 bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-md cursor-pointer shrink-0"
+                        title="Sett opp"
+                        aria-label="Sett opp"
                       >
-                        <UserPlus className="w-3 h-3" />
-                        <span>Sett opp</span>
+                        <UserPlus className="w-3.5 h-3.5" />
                       </button>
                     ) : null}
                   </>

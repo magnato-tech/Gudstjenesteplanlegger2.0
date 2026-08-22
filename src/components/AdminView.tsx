@@ -35,6 +35,7 @@ import { GroupDetailModal } from "./GroupDetailModal";
 import { NewGroupModal } from "./NewGroupModal";
 import { RolleIkon } from "./RolleIkon";
 import { IkonHandling } from "./IkonHandling";
+import { BelastningView } from "./BelastningView";
 import {
   Calendar,
   Users,
@@ -62,6 +63,7 @@ import {
   AlertCircle,
   CircleHelp,
   CheckCircle2,
+  Gauge,
 } from "lucide-react";
 
 interface AdminViewProps {
@@ -233,9 +235,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
   dataSource = "mock",
   onSwitchDataSource,
 }) => {
-  const [activeTab, setActiveTab] = useState<"services" | "people" | "groups" | "roles" | "sync">(
-    "services"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "services" | "belastning" | "people" | "groups" | "roles" | "sync"
+  >("services");
   const [groupTypeFilter, setGroupTypeFilter] = useState("tjenestegruppe");
   const [detailGruppeId, setDetailGruppeId] = useState<string | null>(null);
   const [editingGruppeId, setEditingGruppeId] = useState<string | null>(null);
@@ -282,6 +284,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
   } | null>(null);
   const [personToAssign, setPersonToAssign] = useState<string>("");
   const [apneGudstjenester, setApneGudstjenester] = useState<string[]>([]);
+  const [uthevPersonId, setUthevPersonId] = useState<string | null>(null);
+  const [scrollTilGudstjenesteId, setScrollTilGudstjenesteId] = useState<string | null>(null);
   const [visTidligere, setVisTidligere] = useState(false);
   const [folgOppLederId, setFolgOppLederId] = useState<string | null>(null);
   const [oversiktFilter, setOversiktFilter] = useState<OversiktFilter>(null);
@@ -671,6 +675,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setApneGudstjenester(ids);
   }, [oversiktFilter, db, iDag]);
 
+  useEffect(() => {
+    if (activeTab !== "services" || !scrollTilGudstjenesteId) return;
+    const id = scrollTilGudstjenesteId;
+    const t = window.setTimeout(() => {
+      document.getElementById(`gudstjeneste-${id}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      setScrollTilGudstjenesteId(null);
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [activeTab, scrollTilGudstjenesteId]);
+
+  useEffect(() => {
+    if (!uthevPersonId) return;
+    const t = window.setTimeout(() => setUthevPersonId(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [uthevPersonId]);
+
   const velgOversiktFilter = (neste: Exclude<OversiktFilter, null>) => {
     const aktiv: OversiktFilter = oversiktFilter === neste ? null : neste;
     setOversiktFilter(aktiv);
@@ -707,9 +730,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
     return (
       <div
         key={rolle.RolleID}
-        className="px-3 py-2 flex flex-col lg:grid lg:grid-cols-12 gap-2 lg:items-center"
+        className="px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2"
       >
-        <div className="lg:col-span-4 flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
             onClick={() => setSelectedRolleForModal(rolle)}
@@ -750,7 +773,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </span>
           )}
         </div>
-        <div className="lg:col-span-8 flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center justify-end gap-1.5 sm:ml-auto min-w-0">
           {tildelinger.map((t) => {
             const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
             const status = hentSvarStatus(db, t.TildelingID);
@@ -761,6 +784,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
               <div
                 key={t.TildelingID}
                 className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-xl text-xs border ${
+                  uthevPersonId === t.PersonID ? "ring-2 ring-[#2d5a3f] ring-offset-1" : ""
+                } ${
                   isBekreftet
                     ? "bg-emerald-50/80 border-emerald-200 text-emerald-950 font-medium"
                     : isAvvist
@@ -830,10 +855,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 rolleNavn: rolle.Rollenavn,
               })
             }
-            className="px-2.5 py-1 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition shadow-2xs shrink-0"
+            className="p-1.5 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] rounded-lg cursor-pointer transition shadow-2xs shrink-0"
+            title="Tildel"
+            aria-label="Tildel"
           >
             <UserPlus className="w-3.5 h-3.5" />
-            <span>Tildel</span>
           </button>
         </div>
       </div>
@@ -871,6 +897,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     return (
       <div
         key={gudstjeneste.GudstjenesteID}
+        id={`gudstjeneste-${gudstjeneste.GudstjenesteID}`}
         className={`bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden ${kant}`}
       >
         <button
@@ -1110,6 +1137,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveTab("belastning")}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
+            activeTab === "belastning"
+              ? "border-[#2d5a3f] text-[#2d5a3f]"
+              : "border-transparent text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          <Gauge className="w-4 h-4" />
+          <span>Belastning</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab("people")}
           className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 cursor-pointer transition ${
             activeTab === "people"
@@ -1328,6 +1367,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
           )}
         </div>
+      )}
+      {activeTab === "belastning" && (
+        <BelastningView
+          db={db}
+          onVelgGudstjeneste={(gudstjenesteId, personId) => {
+            setOversiktFilter(null);
+            setActiveTab("services");
+            setApneGudstjenester([gudstjenesteId]);
+            setUthevPersonId(personId);
+            setScrollTilGudstjenesteId(gudstjenesteId);
+          }}
+        />
       )}
       {/* FANE 2: PERSONREGISTER */}
       {activeTab === "people" && (

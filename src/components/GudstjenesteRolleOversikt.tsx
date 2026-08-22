@@ -75,6 +75,8 @@ interface GudstjenesteRolleOversiktProps {
   filter?: RolleOversiktFilter;
   ansvarRolleIds?: string[];
   skjulUbekreftet?: boolean;
+  /** Skjul roller uten synlige frivillige (Min side). Admin/gruppeleder viser alle. */
+  skjulTommeRoller?: boolean;
   inkluderPersonId?: string;
   renderPerson?: (person: RolleOversiktPerson, rolle: Rolle) => React.ReactNode;
   renderEtterPersoner?: (rolle: Rolle, personer: RolleOversiktPerson[]) => React.ReactNode;
@@ -88,6 +90,7 @@ export const GudstjenesteRolleOversikt: React.FC<GudstjenesteRolleOversiktProps>
   filter = null,
   ansvarRolleIds,
   skjulUbekreftet = false,
+  skjulTommeRoller = false,
   inkluderPersonId,
   renderPerson,
   renderEtterPersoner,
@@ -133,6 +136,7 @@ export const GudstjenesteRolleOversikt: React.FC<GudstjenesteRolleOversiktProps>
           }
           return vis;
         })();
+        if (skjulTommeRoller && personer.length === 0) return null;
         return (
           <div
             key={rolle.RolleID}

@@ -847,6 +847,112 @@ export function summerBemanning(
   return totalt;
 }
 
+export type BelastningCelleOppgave = {
+  rolleId: string;
+  rollenavn: string;
+  status: "Bekreftet" | "Venter";
+};
+
+export type BelastningPersonRad = {
+  personId: string;
+  navn: string;
+  fornavn: string;
+  gruppeIds: string[];
+  oppgaver: number;
+  gudstjenester: number;
+  bekreftet: number;
+  venter: number;
+  harFlereSammeDag: boolean;
+  celler: Record<string, BelastningCelleOppgave[]>;
+};
+
+export type BelastningSemester = {
+  gudstjenester: { GudstjenesteID: string; Dato: string; Tid: string; Tema: string }[];
+  rader: BelastningPersonRad[];
+  hoyestLast: { personId: string; navn: string; oppgaver: number } | null;
+  utenOppgaver: number;
+  flereSammeDag: number;
+};
+
+function tellerSomBelastning(status: SvarStatus): status is "Bekreftet" | "Venter" {
+  return status === "Bekreftet" || status === "Venter";
+}
+
+/** Person × kommende gudstjenester. Avvist og eksterne telles ikke. */
+export function belastningForSemester(db: DatabaseState, fraDato: string): BelastningSemester {
+  const gudstjenester = db.gudstjenester
+    .filter((g) => g.Dato >= fraDato)
+    .slice()
+    .sort((a, b) => `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`))
+    .map((g) => ({
+      GudstjenesteID: g.GudstjenesteID,
+      Dato: g.Dato,
+      Tid: g.Tid,
+      Tema: g.Tema || "",
+    }));
+  const gudIdSet = new Set(gudstjenester.map((g) => g.GudstjenesteID));
+  const rolleNavn = new Map(db.roller.map((r) => [r.RolleID, r.Rollenavn]));
+
+  const aktivePersoner = db.personer.filter(
+    (p) => p.Aktiv && !erEksternPersonId(p.PersonID)
+  );
+
+  const rader: BelastningPersonRad[] = aktivePersoner.map((p) => {
+    const gruppeIds = finnTjenestegrupperForPerson(db, p.PersonID).map((t) => t.gruppe.GruppeID);
+    const celler: Record<string, BelastningCelleOppgave[]> = {};
+    let bekreftet = 0;
+    let venter = 0;
+
+    for (const t of db.tildelinger) {
+      if (t.PersonID !== p.PersonID) continue;
+      if (t.EksternNavn || erEksternPersonId(t.PersonID)) continue;
+      if (!gudIdSet.has(t.GudstjenesteID)) continue;
+      const status = hentSvarStatus(db, t.TildelingID);
+      if (!tellerSomBelastning(status)) continue;
+      const oppgave: BelastningCelleOppgave = {
+        rolleId: t.RolleID,
+        rollenavn: rolleNavn.get(t.RolleID) || t.RolleID,
+        status,
+      };
+      if (!celler[t.GudstjenesteID]) celler[t.GudstjenesteID] = [];
+      celler[t.GudstjenesteID].push(oppgave);
+      if (status === "Bekreftet") bekreftet += 1;
+      else venter += 1;
+    }
+
+    const oppgaver = bekreftet + venter;
+    const gudstjenesteAntall = Object.keys(celler).length;
+    const harFlereSammeDag = Object.values(celler).some((liste) => liste.length >= 2);
+
+    return {
+      personId: p.PersonID,
+      navn: p.Navn,
+      fornavn: p.Fornavn || p.Navn,
+      gruppeIds,
+      oppgaver,
+      gudstjenester: gudstjenesteAntall,
+      bekreftet,
+      venter,
+      harFlereSammeDag,
+      celler,
+    };
+  });
+
+  rader.sort((a, b) => b.oppgaver - a.oppgaver || a.navn.localeCompare(b.navn, "nb"));
+
+  const medLast = rader.filter((r) => r.oppgaver > 0);
+  const hoyest = medLast[0];
+  return {
+    gudstjenester,
+    rader,
+    hoyestLast: hoyest
+      ? { personId: hoyest.personId, navn: hoyest.navn, oppgaver: hoyest.oppgaver }
+      : null,
+    utenOppgaver: rader.filter((r) => r.oppgaver === 0).length,
+    flereSammeDag: rader.filter((r) => r.harFlereSammeDag).length,
+  };
+}
+
 /**
  * Beregner ledige oppgaver (avledet sannhet) for alle eller spesifikke gudstjenester
  */

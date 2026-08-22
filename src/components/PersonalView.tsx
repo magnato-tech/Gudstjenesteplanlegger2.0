@@ -12,7 +12,6 @@ import { RolleIkon } from "./RolleIkon";
 import { IkonHandling } from "./IkonHandling";
 import { GudstjenesteRolleOversikt } from "./GudstjenesteRolleOversikt";
 import {
-  CheckCircle2,
   Clock3,
   Check,
   X,
@@ -92,10 +91,6 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
   const [showDatePickerForRolle, setShowDatePickerForRolle] = useState<Rolle | null>(null);
   const [datePickerFilter, setDatePickerFilter] = useState<"ledige" | "mine" | "alle">("alle");
   const [visAlleFor, setVisAlleFor] = useState<Record<string, boolean>>({});
-  const [actionFeedback, setActionFeedback] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
 
   const openDatePicker = (rolle: Rolle) => {
     setDatePickerFilter("alle");
@@ -157,57 +152,29 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
       return dateA.localeCompare(dateB);
     });
 
-  // Håndter bekreftelse ("Dette passer")
-  const handleBekreft = (tildelingId: string, rolleNavn: string, dato: string) => {
-    const updatedDb = svarPaaTildeling(
-      db,
-      tildelingId,
-      person.PersonID,
-      "Bekreftet",
-      "Bekreftet av frivillig"
+  const handleBekreft = (tildelingId: string, trekkTilbake?: boolean) => {
+    onUpdateDb(
+      svarPaaTildeling(
+        db,
+        tildelingId,
+        person.PersonID,
+        trekkTilbake ? "Venter" : "Bekreftet",
+        trekkTilbake ? "Bekreftelse trukket av frivillig" : "Bekreftet av frivillig"
+      )
     );
-    onUpdateDb(updatedDb);
-    setActionFeedback({
-      type: "success",
-      message: `Takk! Du har bekreftet oppgaven som ${rolleNavn} den ${dato}.`,
-    });
-    setTimeout(() => setActionFeedback(null), 4500);
   };
 
-  // Håndter avkreftelse ("Kan ikke")
-  const handleAvkreft = (tildelingId: string, rolleNavn: string, dato: string, rolle: Rolle) => {
-    const updatedDb = svarPaaTildeling(
-      db,
-      tildelingId,
-      person.PersonID,
-      "Avvist",
-      "Meldt forfall"
+  const handleAvkreft = (tildelingId: string) => {
+    onUpdateDb(
+      svarPaaTildeling(db, tildelingId, person.PersonID, "Avvist", "Meldt forfall")
     );
-    onUpdateDb(updatedDb);
-    setActionFeedback({
-      type: "error",
-      message: `Du har meldt at ${dato} ikke passer for ${rolleNavn}. Du kan velge en annen dato nedenfor hvis du har anledning!`,
-    });
-    setTimeout(() => setActionFeedback(null), 6000);
   };
 
-  // Håndter valg av ny/annen dato
   const handleVelgAnnenDato = (gudstjenesteId: string, rolle: Rolle) => {
     const result = velgDatoForPerson(db, person.PersonID, gudstjenesteId, rolle.RolleID);
     if (result.success && result.updatedDb) {
       onUpdateDb(result.updatedDb);
-      const g = db.gudstjenester.find((item) => item.GudstjenesteID === gudstjenesteId);
-      setActionFeedback({
-        type: "success",
-        message: `Du er påmeldt som ${rolle.Rollenavn} ${g?.Dato || ""}. Du kan melde deg på flere datoer.`,
-      });
-    } else {
-      setActionFeedback({
-        type: "error",
-        message: result.message,
-      });
     }
-    setTimeout(() => setActionFeedback(null), 4500);
   };
 
   // Samle alle unike roller som personen enten har i personroller ELLER har tildelinger for
@@ -230,32 +197,6 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Tilbakemeldingsbanner */}
-      {actionFeedback && (
-        <div
-          className={`p-4 rounded-2xl flex items-center justify-between text-sm shadow-xs transition animate-fadeIn ${
-            actionFeedback.type === "success"
-              ? "bg-[#eef5f1] text-[#1e3e2b] border border-[#d2e8d9]"
-              : "bg-amber-50 text-amber-900 border border-amber-200"
-          }`}
-        >
-          <div className="flex items-center gap-2.5">
-            {actionFeedback.type === "success" ? (
-              <CheckCircle2 className="w-5 h-5 text-[#2d5a3f] shrink-0" />
-            ) : (
-              <Info className="w-5 h-5 text-amber-700 shrink-0" />
-            )}
-            <span className="font-medium leading-snug">{actionFeedback.message}</span>
-          </div>
-          <button
-            onClick={() => setActionFeedback(null)}
-            className="text-xs font-semibold underline cursor-pointer ml-3 shrink-0"
-          >
-            Lukk
-          </button>
-        </div>
-      )}
-
       {/* 1. TOPP-KORT: Hilsen og velkomst som i referansebildet BekreftOppgave.png */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-xs space-y-4">
         <div>
@@ -382,17 +323,12 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                             </span>
                             <div className="flex items-center gap-1 ml-auto shrink-0">
                             <IkonHandling
-                              label={isBekreftet ? "Bekreftet" : "Dette passer"}
+                              label={isBekreftet ? "Sett tilbake til forespurt" : "Dette passer"}
                               Icon={Check}
                               variant="confirm"
                               active={isBekreftet}
                               onClick={() => {
-                                if (isBekreftet) return;
-                                handleBekreft(
-                                  item.tildeling.TildelingID,
-                                  item.rolle!.Rollenavn,
-                                  gudstjeneste.Dato
-                                );
+                                handleBekreft(item.tildeling.TildelingID, isBekreftet);
                               }}
                             />
                             <IkonHandling
@@ -400,14 +336,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                               variant="decline"
                               Icon={X}
                               active={isAvvist}
-                              onClick={() =>
-                                handleAvkreft(
-                                  item.tildeling.TildelingID,
-                                  item.rolle!.Rollenavn,
-                                  gudstjeneste.Dato,
-                                  item.rolle!
-                                )
-                              }
+                              onClick={() => handleAvkreft(item.tildeling.TildelingID)}
                             />
                             </div>
                           </div>
@@ -438,6 +367,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                           roller={rollerIOversikt}
                           onSelectRolle={setSelectedRolleForModal}
                           skjulUbekreftet
+                          skjulTommeRoller
                           inkluderPersonId={person.PersonID}
                         />
                       </div>
@@ -475,18 +405,6 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                 <X className="w-6 h-6" />
               </button>
             </div>
-
-            {actionFeedback && (
-              <div
-                className={`mx-4 sm:mx-6 mt-4 p-3 rounded-2xl text-sm ${
-                  actionFeedback.type === "success"
-                    ? "bg-[#eef5f1] text-[#1e3e2b] border border-[#d2e8d9]"
-                    : "bg-amber-50 text-amber-900 border border-amber-200"
-                }`}
-              >
-                {actionFeedback.message}
-              </div>
-            )}
 
             {(() => {
               const rader = byggPåmeldingsrader(db, person.PersonID, showDatePickerForRolle);

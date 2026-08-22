@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   loadDatabase,
   loadLocalDatabase,
@@ -37,6 +37,7 @@ export default function App() {
   const [showPinModal, setShowPinModal] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>("");
   const [pinError, setPinError] = useState<string | null>(null);
+  const harValgtStartvisning = useRef(false);
 
   const fetchRemote = useCallback(() => {
     let cancelled = false;
@@ -107,6 +108,7 @@ export default function App() {
   // ?t= / ?token= / ?personId= / ?p= er personlige lenker → Min side for den personen.
   useEffect(() => {
     if (!db || db.personer.length === 0) return;
+    if (harValgtStartvisning.current) return;
     try {
       const params = new URLSearchParams(window.location.search);
       const tokenParam = params.get("t") || params.get("token") || params.get("personId") || params.get("p");
@@ -128,6 +130,7 @@ export default function App() {
           setSelectedPersonId(found.PersonID);
           setIsMagicLinkUser(true);
           velgVisning(found.PersonID, "personal");
+          harValgtStartvisning.current = true;
           return;
         }
       }
@@ -137,6 +140,7 @@ export default function App() {
         setSelectedPersonId(forsteAdmin.PersonID);
         setIsMagicLinkUser(false);
         velgVisning(forsteAdmin.PersonID, "admin");
+        harValgtStartvisning.current = true;
       }
     } catch (e) {
       console.warn("Kunne ikke lese URL-parametre:", e);

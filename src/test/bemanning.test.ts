@@ -15,6 +15,7 @@ import {
   tildelingVisningsnavn,
   plusBemanningstall,
   tomtBemanningstall,
+  belastningForSemester,
 } from "../services/dataService";
 import { personerIRolle } from "../components/GudstjenesteRolleOversikt";
 import { Rolle, Person, Tildeling, Svar } from "../types/database";
@@ -307,6 +308,78 @@ test("E: avvist navn er med i oversikten, bekreftet teller grønt", "E", () => {
   const tall = summerBemanning(db, "GUD001", [rolle()]);
   assert.equal(tall.bekreftet, 1);
   assert.equal(tall.ledige, 1);
+});
+
+test("belastning: bekreftet og venter teller, avvist ikke", "A", () => {
+  let db = tomDb();
+  db = tildel(db, "T1", "P001", "Bekreftet");
+  db = tildel(db, "T2", "P001", "Venter");
+  db = tildel(db, "T3", "P002", "Avvist");
+  const b = belastningForSemester(db, "2026-08-01");
+  const camilla = b.rader.find((r) => r.personId === "P001")!;
+  const astrid = b.rader.find((r) => r.personId === "P002")!;
+  assert.equal(camilla.oppgaver, 2);
+  assert.equal(camilla.gudstjenester, 1);
+  assert.equal(camilla.bekreftet, 1);
+  assert.equal(camilla.venter, 1);
+  assert.equal(astrid.oppgaver, 0);
+  assert.equal(b.utenOppgaver, 2);
+});
+
+test("belastning: flere oppgaver samme søndag", "A", () => {
+  let db = tomDb();
+  db = {
+    ...db,
+    roller: [
+      ...db.roller,
+      {
+        RolleID: "R010",
+        Rollenavn: "Baking",
+        Beskrivelse: "",
+        Aktiv: true,
+        Behov: 1,
+        GruppeID: "G005",
+        OpprettetDato: "2026-01-01",
+        SistEndret: "2026-01-01",
+      },
+    ],
+  };
+  db = tildel(db, "T1", "P001", "Bekreftet");
+  db = tildel(db, "T2", "P001", "Bekreftet", { RolleID: "R010" });
+  const b = belastningForSemester(db, "2026-08-01");
+  const camilla = b.rader.find((r) => r.personId === "P001")!;
+  assert.equal(camilla.harFlereSammeDag, true);
+  assert.equal(camilla.celler.GUD001.length, 2);
+  assert.equal(b.flereSammeDag, 1);
+  assert.equal(b.hoyestLast?.personId, "P001");
+});
+
+test("belastning: eksterne og fortid telles ikke", "A", () => {
+  let db = tomDb();
+  db = {
+    ...db,
+    gudstjenester: [
+      ...db.gudstjenester,
+      {
+        GudstjenesteID: "GUD000",
+        Dato: "2020-01-01",
+        Tid: "11:00",
+        Sted: "",
+        Tema: "Gammel",
+      },
+    ],
+    personer: [
+      ...db.personer,
+      person({ PersonID: "EXT001", Navn: "Gjest", Fornavn: "Gjest" }),
+    ],
+  };
+  db = tildel(db, "T1", "P001", "Bekreftet", { GudstjenesteID: "GUD000" });
+  db = tildel(db, "T2", "EXT001", "Bekreftet", { EksternNavn: "Gjest" });
+  const b = belastningForSemester(db, "2026-08-01");
+  assert.ok(!b.rader.some((r) => r.personId === "EXT001"));
+  const camilla = b.rader.find((r) => r.personId === "P001")!;
+  assert.equal(camilla.oppgaver, 0);
+  assert.equal(b.gudstjenester.length, 1);
 });
 
 test("plusBemanningstall summerer semester-KPI", "A", () => {
