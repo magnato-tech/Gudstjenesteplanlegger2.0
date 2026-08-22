@@ -2,12 +2,15 @@ import React, { useState } from "react";
 import {
   DatabaseState,
   getEffektivtBehov,
+  hentSvarStatus,
   svarPaaTildeling,
   velgDatoForPerson,
 } from "../services/dataService";
-import { Rolle, SvarStatus } from "../types/database";
+import { Rolle } from "../types/database";
 import { RoleDescriptionModal } from "./RoleDescriptionModal";
 import { RolleIkon } from "./RolleIkon";
+import { IkonHandling } from "./IkonHandling";
+import { GudstjenesteRolleOversikt } from "./GudstjenesteRolleOversikt";
 import {
   CheckCircle2,
   Clock3,
@@ -51,8 +54,7 @@ function byggPåmeldingsrader(
       );
       const personerPå = tildelinger
         .map((t) => {
-          const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-          const rawStatus = svar?.Svar || "Venter";
+          const rawStatus = hentSvarStatus(db, t.TildelingID);
           if (rawStatus === "Avvist") return null;
           const status = rawStatus === "Bekreftet" ? ("Bekreftet" as const) : ("Venter" as const);
           const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
@@ -65,20 +67,19 @@ function byggPåmeldingsrader(
         .filter((x): x is { personId: string; navn: string; status: "Bekreftet" | "Venter" } => x !== null);
 
       const behov = getEffektivtBehov(g.GudstjenesteID, rolle, db.tjenestebehov);
-      const ledige = Math.max(0, behov - personerPå.length);
+      const bekreftetAntall = personerPå.filter((p) => p.status === "Bekreftet").length;
+      const ledige = Math.max(0, behov - bekreftetAntall);
       const min = personerPå.find((p) => p.personId === personId);
       const minAvvist = tildelinger.some((t) => {
         if (t.PersonID !== personId) return false;
-        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-        return svar?.Svar === "Avvist";
+        return hentSvarStatus(db, t.TildelingID) === "Avvist";
       });
 
-      let status: PåmeldingsStatus = "full";
+      let status: PåmeldingsStatus = ledige > 0 || minAvvist ? "ledig" : "full";
       if (min?.status === "Bekreftet") status = "min-bekreftet";
       else if (min) status = "min-venter";
-      else if (ledige > 0 || minAvvist) status = "ledig";
 
-      return { gudstjeneste: g, behov, ledige, personerPå, status };
+      return { gudstjeneste: g, behov, ledige, bekreftetAntall, personerPå, status };
     });
 }
 
@@ -140,13 +141,13 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
     .map((t) => {
       const gudstjeneste = db.gudstjenester.find((g) => g.GudstjenesteID === t.GudstjenesteID);
       const rolle = db.roller.find((r) => r.RolleID === t.RolleID);
-      const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
+      const status = hentSvarStatus(db, t.TildelingID);
       return {
         tildeling: t,
         gudstjeneste,
         rolle,
-        svar,
-        status: (svar ? svar.Svar : "Venter") as SvarStatus,
+        svar: db.svar.find((s) => s.TildelingID === t.TildelingID),
+        status,
       };
     })
     .filter((item) => item.gudstjeneste !== undefined && item.rolle !== undefined)
@@ -298,23 +299,6 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
           );
         }
 
-        const personerIRolle = (gudstjenesteId: string, rolleId: string) =>
-          db.tildelinger
-            .filter((t) => t.GudstjenesteID === gudstjenesteId && t.RolleID === rolleId)
-            .map((t) => {
-              const svar = (db.svar.find((s) => s.TildelingID === t.TildelingID)?.Svar ||
-                "Venter") as SvarStatus;
-              if (svar === "Avvist") return null;
-              const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
-              const navn = p?.Fornavn || p?.Navn;
-              if (!navn) return null;
-              return { personId: t.PersonID, navn, status: svar };
-            })
-            .filter(
-              (x): x is { personId: string; navn: string; status: SvarStatus } =>
-                x !== null
-            );
-
         return (
           <div className="space-y-2">
             {visningsRoller.length > 0 && (
@@ -371,10 +355,17 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                             key={item.tildeling.TildelingID}
                             className="flex items-center gap-2 py-1.5 border-t border-slate-100 overflow-x-auto"
                           >
-                            <RolleIkon rollenavn={item.rolle?.Rollenavn || ""} />
-                            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 shrink-0">
-                              {item.rolle?.Rollenavn}
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => item.rolle && setSelectedRolleForModal(item.rolle)}
+                              title="Se instruks"
+                              className="flex items-center gap-2 shrink-0 text-left cursor-pointer rounded-lg hover:bg-slate-50 px-0.5 py-0.5"
+                            >
+                              <RolleIkon rollenavn={item.rolle?.Rollenavn || ""} />
+                              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                {item.rolle?.Rollenavn}
+                              </span>
+                            </button>
                             <span className="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5 min-w-[4rem] shrink-0">
                               {isAvvist ? null : (
                                 <>
@@ -389,25 +380,26 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                                 </>
                               )}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() =>
+                            <div className="flex items-center gap-1 ml-auto shrink-0">
+                            <IkonHandling
+                              label={isBekreftet ? "Bekreftet" : "Dette passer"}
+                              Icon={Check}
+                              variant="confirm"
+                              active={isBekreftet}
+                              onClick={() => {
+                                if (isBekreftet) return;
                                 handleBekreft(
                                   item.tildeling.TildelingID,
                                   item.rolle!.Rollenavn,
                                   gudstjeneste.Dato
-                                )
-                              }
-                              className={`px-2 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer shrink-0 ${
-                                isBekreftet
-                                  ? "bg-[#eef5f1] text-[#1e3e2b] border-[#86efac]"
-                                  : "bg-white hover:bg-[#eef5f1] text-[#2d5a3f] border-[#bbf7d0]"
-                              }`}
-                            >
-                              {isBekreftet ? "Bekreftet" : "Dette passer"}
-                            </button>
-                            <button
-                              type="button"
+                                );
+                              }}
+                            />
+                            <IkonHandling
+                              label={isAvvist ? "Meldt forfall" : "Kan ikke"}
+                              variant="decline"
+                              Icon={X}
+                              active={isAvvist}
                               onClick={() =>
                                 handleAvkreft(
                                   item.tildeling.TildelingID,
@@ -416,31 +408,12 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                                   item.rolle!
                                 )
                               }
-                              className={`px-2 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer shrink-0 ${
-                                isAvvist
-                                  ? "bg-rose-100 text-rose-800 border-rose-300"
-                                  : "bg-white hover:bg-rose-50 text-rose-700 border-rose-200"
-                              }`}
-                            >
-                              Kan ikke
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedRolleForModal(item.rolle!)}
-                              className="text-[11px] text-[#2d5a3f] underline cursor-pointer shrink-0 ml-auto"
-                            >
-                              Instruks
-                            </button>
+                            />
+                            </div>
                           </div>
                         );
                       })}
                     </div>
-                  )}
-
-                  {mine.length === 0 && (
-                    <p className="px-4 sm:px-5 py-1.5 text-xs text-slate-400 border-t border-slate-100">
-                      Ikke satt opp
-                    </p>
                   )}
 
                   <div className="px-4 sm:px-5 pb-2.5 pt-1">
@@ -459,46 +432,14 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
 
                     {visAlle && (
                       <div className="mt-1">
-                        {rollerIOversikt.map((rolle) => {
-                          const personer = personerIRolle(
-                            gudstjeneste.GudstjenesteID,
-                            rolle.RolleID
-                          );
-                          return (
-                            <div
-                              key={rolle.RolleID}
-                              className="flex items-center justify-between gap-3 py-1.5 border-t border-slate-100 min-h-[2rem]"
-                            >
-                              <span className="inline-flex items-center gap-2 min-w-0">
-                                <RolleIkon rollenavn={rolle.Rollenavn} />
-                                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                                  {rolle.Rollenavn}
-                                </span>
-                              </span>
-                              <span className="text-sm font-semibold text-slate-800 text-right inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                                {personer.map((p) => (
-                                  <span
-                                    key={p.personId}
-                                    className="inline-flex items-center gap-1.5"
-                                  >
-                                    <span
-                                      className={`w-2 h-2 rounded-full shrink-0 ${
-                                        p.status === "Bekreftet"
-                                          ? "bg-emerald-500"
-                                          : "bg-amber-400"
-                                      }`}
-                                      title={
-                                        p.status === "Bekreftet" ? "Bekreftet" : "Forespurt"
-                                      }
-                                      aria-hidden
-                                    />
-                                    {p.navn}
-                                  </span>
-                                ))}
-                              </span>
-                            </div>
-                          );
-                        })}
+                        <GudstjenesteRolleOversikt
+                          db={db}
+                          gudstjenesteId={gudstjeneste.GudstjenesteID}
+                          roller={rollerIOversikt}
+                          onSelectRolle={setSelectedRolleForModal}
+                          skjulUbekreftet
+                          inkluderPersonId={person.PersonID}
+                        />
                       </div>
                     )}
                   </div>
@@ -522,7 +463,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                   {showDatePickerForRolle.Rollenavn}
                 </h3>
                 <p className="text-sm text-slate-600 mt-1">
-                  Se ledige, ubekreftede og fulle søndager. Ett trykk melder deg på.
+                  Se ledige og dine søndager. Behovstallet er veiledende — du kan melde deg på selv om det er nok folk.
                 </p>
               </div>
               <button
@@ -586,7 +527,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                       </button>
                     ))}
                     <span className="text-xs text-slate-400 self-center ml-auto">
-                      {antallFulle} fulle
+                      {antallFulle} med dekket veiledende behov
                     </span>
                   </div>
 
@@ -597,8 +538,8 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                       </div>
                     ) : (
                       filtrert.map((rad) => {
-                        const { gudstjeneste: g, behov, ledige, personerPå, status } = rad;
-                        const kanMelde = status === "ledig";
+                        const { gudstjeneste: g, behov, ledige, bekreftetAntall, personerPå, status } = rad;
+                        const kanMelde = status === "ledig" || status === "full";
                         return (
                           <div
                             key={g.GudstjenesteID}
@@ -624,12 +565,21 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
                                 {g.Sted ? ` · ${g.Sted}` : ""}
                               </div>
                               <div className="text-xs text-slate-500">
-                                {personerPå.length} av {behov} påmeldt
-                                {ledige > 0 ? ` · ${ledige} ledig` : ""}
+                                {bekreftetAntall} av {behov} bekreftet (veiledende)
+                                {ledige > 0 ? ` · ${ledige} ledig` : " · kan overbookes"}
                               </div>
-                              {personerPå.length > 0 && (
+                              {personerPå.filter(
+                                (p) =>
+                                  p.status === "Bekreftet" || p.personId === person.PersonID
+                              ).length > 0 && (
                                 <div className="flex flex-wrap gap-1.5 pt-0.5">
-                                  {personerPå.map((p) => (
+                                  {personerPå
+                                    .filter(
+                                      (p) =>
+                                        p.status === "Bekreftet" ||
+                                        p.personId === person.PersonID
+                                    )
+                                    .map((p) => (
                                     <span
                                       key={p.personId}
                                       className={`text-[11px] font-medium px-2 py-0.5 rounded-lg ${

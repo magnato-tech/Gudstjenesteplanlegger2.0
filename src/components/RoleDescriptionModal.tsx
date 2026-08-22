@@ -1,12 +1,19 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Rolle, Rollebeskrivelse, Gruppe } from "../types/database";
-import { X, BookOpen, Users, Clock } from "lucide-react";
+import { RolleIkon } from "./RolleIkon";
+import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
+import { IkonHandling } from "./IkonHandling";
 
 interface RoleDescriptionModalProps {
   rolle: Rolle | null;
   rollebeskrivelse: Rollebeskrivelse | null;
   gruppe: Gruppe | null;
   onClose: () => void;
+  editable?: boolean;
+  grupper?: Gruppe[];
+  antallKvalifiserte?: number;
+  onUpdateRolle?: (patch: { GruppeID?: string; Behov?: number }) => void;
+  onSaveInstruks?: (tekst: string) => void;
 }
 
 const FORKORTELSER = new Set([
@@ -62,27 +69,66 @@ export function splittInstruks(tekst: string): string[] {
   return setninger.length > 1 ? setninger : [enLinje];
 }
 
+export function oppsummerInstruks(tekst: string, maks = 140): string {
+  const første = (splittInstruks(tekst)[0] || tekst || "").trim();
+  if (!første) return "";
+  if (første.length <= maks) return første;
+  return `${første.slice(0, maks).replace(/\s+\S*$/, "")}…`;
+}
+
 export const RoleDescriptionModal: React.FC<RoleDescriptionModalProps> = ({
   rolle,
   rollebeskrivelse,
   gruppe,
   onClose,
+  editable = false,
+  grupper = [],
+  antallKvalifiserte,
+  onUpdateRolle,
+  onSaveInstruks,
 }) => {
+  const gjeldendeTekst = rollebeskrivelse?.Rollebeskrivelse || "";
+  const [redigererInstruks, setRedigererInstruks] = useState(false);
+  const [utkastInstruks, setUtkastInstruks] = useState(gjeldendeTekst);
+  const [visBekreftInstruks, setVisBekreftInstruks] = useState(false);
+
+  useEffect(() => {
+    setRedigererInstruks(false);
+    setUtkastInstruks(gjeldendeTekst);
+    setVisBekreftInstruks(false);
+  }, [rolle?.RolleID, gjeldendeTekst]);
+
   if (!rolle) return null;
 
-  const punkter = splittInstruks(rollebeskrivelse?.Rollebeskrivelse || "");
+  const punkter = splittInstruks(gjeldendeTekst);
+
+  const avbrytInstruks = () => {
+    setUtkastInstruks(gjeldendeTekst);
+    setRedigererInstruks(false);
+    setVisBekreftInstruks(false);
+  };
+
+  const bekreftLagreInstruks = () => {
+    onSaveInstruks?.(utkastInstruks.trim());
+    setRedigererInstruks(false);
+    setVisBekreftInstruks(false);
+  };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-start justify-between pb-4 border-b border-slate-100 mb-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#eef5f1] text-[#2d5a3f] rounded-xl border border-[#d2e8d9]">
-              <BookOpen className="w-6 h-6" />
-            </div>
+            <RolleIkon rollenavn={rolle.Rollenavn} className="w-11 h-11" />
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-[#2d5a3f]">
-                Instruks
+                Rolle
               </span>
               <h2 className="text-xl font-bold text-slate-900">{rolle.Rollenavn}</h2>
             </div>
@@ -96,38 +142,118 @@ export const RoleDescriptionModal: React.FC<RoleDescriptionModalProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-5">
+        <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
             <div className="text-xs text-slate-500 flex items-center gap-1.5 mb-1">
-              <Users className="w-3.5 h-3.5 text-slate-400" />
+              <Users className="w-3.5 h-3.5 text-emerald-600" />
               <span>Tjenestegruppe</span>
             </div>
-            <div className="font-semibold text-slate-900 text-sm">
-              {gruppe ? gruppe.Gruppenavn : "Ikke spesifisert"}
-            </div>
+            {editable && onUpdateRolle ? (
+              <select
+                value={rolle.GruppeID || ""}
+                onChange={(e) => onUpdateRolle({ GruppeID: e.target.value })}
+                className="w-full text-sm font-semibold text-slate-900 border border-slate-200 rounded-lg p-1.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+              >
+                <option value="">Ingen</option>
+                {grupper
+                  .filter((g) => g.Aktiv)
+                  .slice()
+                  .sort((a, b) => a.Gruppenavn.localeCompare(b.Gruppenavn, "nb"))
+                  .map((g) => (
+                    <option key={g.GruppeID} value={g.GruppeID}>
+                      {g.Gruppenavn}
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <div className="font-semibold text-slate-900 text-sm">
+                {gruppe ? gruppe.Gruppenavn : "Ikke spesifisert"}
+              </div>
+            )}
           </div>
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
             <div className="text-xs text-slate-500 flex items-center gap-1.5 mb-1">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              <Clock className="w-3.5 h-3.5 text-amber-500" />
               <span>Standard behov</span>
             </div>
-            <div className="font-semibold text-slate-900 text-sm">
-              {rolle.Behov} {rolle.Behov === 1 ? "person" : "personer"}
-            </div>
+            {editable && onUpdateRolle ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={rolle.Behov}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (!Number.isFinite(n) || n < 1) return;
+                    onUpdateRolle({ Behov: Math.round(n) });
+                  }}
+                  className="w-20 text-sm font-semibold text-slate-900 border border-slate-200 rounded-lg p-1.5 bg-white focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
+                />
+                <span className="text-xs text-slate-500">
+                  {rolle.Behov === 1 ? "person" : "personer"}
+                </span>
+              </div>
+            ) : (
+              <div className="font-semibold text-slate-900 text-sm">
+                {rolle.Behov} {rolle.Behov === 1 ? "person" : "personer"}
+              </div>
+            )}
           </div>
         </div>
 
-        {rolle.Beskrivelse && (
-          <p className="text-sm text-slate-600 leading-relaxed mb-5">
-            {rolle.Beskrivelse}
+        {typeof antallKvalifiserte === "number" && (
+          <p className="text-xs text-slate-500 mb-4">
+            {antallKvalifiserte} {antallKvalifiserte === 1 ? "person" : "personer"} har denne
+            rollen.
           </p>
         )}
 
+        {rolle.Beskrivelse && (
+          <p className="text-sm text-slate-600 leading-relaxed mb-4">{rolle.Beskrivelse}</p>
+        )}
+
         <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-            Mine instrukser
-          </h3>
-          {punkter.length > 0 ? (
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Instruks
+            </h3>
+            {editable && onSaveInstruks && !redigererInstruks && (
+              <IkonHandling
+                label="Rediger instruks"
+                Icon={Pencil}
+                onClick={() => setRedigererInstruks(true)}
+              />
+            )}
+          </div>
+
+          {redigererInstruks ? (
+            <div className="space-y-3">
+              <textarea
+                value={utkastInstruks}
+                onChange={(e) => setUtkastInstruks(e.target.value)}
+                rows={8}
+                className="w-full text-sm text-slate-800 border border-slate-200 rounded-xl p-3 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] resize-y"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={avbrytInstruks}
+                  className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisBekreftInstruks(true)}
+                  disabled={utkastInstruks.trim() === gjeldendeTekst.trim()}
+                  className="px-3 py-1.5 text-sm font-semibold bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white rounded-lg cursor-pointer"
+                >
+                  Lagre instruks
+                </button>
+              </div>
+            </div>
+          ) : punkter.length > 0 ? (
             <ol className="space-y-3">
               {punkter.map((punkt, i) => (
                 <li key={i} className="flex gap-3 items-start">
@@ -147,16 +273,62 @@ export const RoleDescriptionModal: React.FC<RoleDescriptionModalProps> = ({
           )}
         </div>
 
-        <div className="flex justify-end pt-4 mt-5 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-lg cursor-pointer"
-          >
-            Lukk
-          </button>
-        </div>
+        {!editable && (
+          <div className="flex justify-end pt-4 mt-5 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-lg cursor-pointer"
+            >
+              Lukk
+            </button>
+          </div>
+        )}
       </div>
+
+      {visBekreftInstruks && (
+        <div
+          className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[60]"
+          onClick={(e) => {
+            e.stopPropagation();
+            setVisBekreftInstruks(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2 bg-amber-50 text-amber-600 rounded-xl border border-amber-200">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900">Endre instruks?</h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  Ønsker du virkelig å endre instruksen. Dette blir da endret for alle som har
+                  denne rollen.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setVisBekreftInstruks(false)}
+                className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={bekreftLagreInstruks}
+                className="px-3 py-1.5 text-sm font-semibold bg-[#2d5a3f] hover:bg-[#234731] text-white rounded-lg cursor-pointer"
+              >
+                Ja, lagre
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -8,9 +8,9 @@ import {
   visningErTillatt,
   AppView,
   finnPersonMedTokenEllerId,
-  useRemoteData,
-  enableSessionMockOverride,
-  clearSessionMockOverride,
+  switchDevDataSource,
+  getDevDataSource,
+  type DevDataSource,
 } from "./services/dataService";
 import { Header } from "./components/Header";
 import { PersonalView } from "./components/PersonalView";
@@ -19,13 +19,13 @@ import { AdminView } from "./components/AdminView";
 import { Shield, ArrowLeft, Lock } from "lucide-react";
 
 export default function App() {
-  const remoteByConfig = useRemoteData();
+  const [dataSource, setDataSource] = useState<DevDataSource>(() => getDevDataSource());
+  const remoteByConfig = dataSource === "remote";
   const [db, setDb] = useState<DatabaseState | null>(() =>
     remoteByConfig ? null : loadLocalDatabase()
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoadingRemote, setIsLoadingRemote] = useState<boolean>(remoteByConfig);
-  const [usingDevMockFallback, setUsingDevMockFallback] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("personal");
   const [selectedPersonId, setSelectedPersonId] = useState<string>("P001");
   const [isMagicLinkUser, setIsMagicLinkUser] = useState<boolean>(false);
@@ -67,19 +67,40 @@ export default function App() {
   }, [remoteByConfig, fetchRemote]);
 
   const handleRetryRemote = () => {
-    clearSessionMockOverride();
-    setUsingDevMockFallback(false);
     setDb(null);
     fetchRemote();
   };
 
   const handleUseMockFallback = () => {
     if (import.meta.env.PROD) return;
-    enableSessionMockOverride();
-    setUsingDevMockFallback(true);
-    setLoadError(null);
-    setIsLoadingRemote(false);
-    setDb(loadLocalDatabase());
+    void switchDevDataSource("mock").then((mock) => {
+      setDataSource("mock");
+      setLoadError(null);
+      setIsLoadingRemote(false);
+      setDb(mock);
+    });
+  };
+
+  const handleSwitchDataSource = (source: DevDataSource) => {
+    if (import.meta.env.PROD) return;
+    if (source === "remote") {
+      setDb(null);
+      setIsLoadingRemote(true);
+      setLoadError(null);
+    }
+    void switchDevDataSource(source)
+      .then((loaded) => {
+        setDataSource(source);
+        setDb(loaded);
+        setLoadError(null);
+        setIsLoadingRemote(false);
+      })
+      .catch((e) => {
+        setDataSource(source);
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setIsLoadingRemote(false);
+        if (source === "remote") setDb(null);
+      });
   };
 
   // Les inn URL-parametre ved oppstart (støtter ?t=ugjettelig_token samt bakoverkompatibel ?personId=P001)
@@ -120,8 +141,12 @@ export default function App() {
     }
   }, [db]);
 
-  const handleSelectPerson = (personId: string) => {
+  const handleSelectPerson = (personId: string, view?: AppView) => {
     setSelectedPersonId(personId);
+    if (view) {
+      setActiveView(view);
+      return;
+    }
     if (!db) return;
     const newTilgang = hentTilgang(db, personId);
     if (!visningErTillatt(newTilgang, activeView)) {
@@ -220,9 +245,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex flex-col selection:bg-indigo-500 selection:text-white">
-      {usingDevMockFallback && (
+      {dataSource === "mock" && import.meta.env.DEV && (
         <div className="bg-amber-100 text-amber-950 px-4 py-2 text-xs font-medium text-center border-b border-amber-200">
-          Utvikling: viser mock-data for denne økten. Endringer skrives ikke til Google Sheets.
+          Utvikling: mock-data. Leser og skriver ikke til Google Sheets. Bytt under Administrator → Google Sheets & Data.
         </div>
       )}
       {/* Banner når administrator tester visning som en annen person */}
@@ -282,6 +307,8 @@ export default function App() {
             db={db}
             onUpdateDb={handleUpdateDb}
             onSelectPerson={handleAdminSimulatePerson}
+            onSwitchDataSource={handleSwitchDataSource}
+            dataSource={dataSource}
           />
         )}
       </main>

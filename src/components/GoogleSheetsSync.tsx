@@ -26,11 +26,17 @@ import {
 interface GoogleSheetsSyncProps {
   db: DatabaseState;
   onUpdateDb: (updatedDb: DatabaseState) => void;
+  dataSource?: "mock" | "remote";
+  onSwitchDataSource?: (source: "mock" | "remote") => void;
+  onOpenImport?: () => void;
 }
 
 export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
   db,
   onUpdateDb,
+  dataSource = "mock",
+  onSwitchDataSource,
+  onOpenImport,
 }) => {
   const [scriptUrl, setScriptUrl] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -117,11 +123,48 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs space-y-6">
+      {import.meta.env.DEV && onSwitchDataSource && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-3">
+          <h3 className="text-sm font-bold text-slate-800">Datakilde (utvikling)</h3>
+          <p className="text-xs text-slate-600">
+            Mock-data fyller appen med testdata og leser/skriver aldri Google Sheets. Ekte data henter og lagrer mot menighetsarket.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => onSwitchDataSource("mock")}
+              className={`text-left p-4 rounded-xl border cursor-pointer ${
+                dataSource === "mock"
+                  ? "border-amber-300 bg-amber-50"
+                  : "border-slate-200 bg-white hover:bg-slate-50"
+              }`}
+            >
+              <div className="text-sm font-bold text-slate-900">Mock-data</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Populerer med innebygd testdata. Ingen Sheets-trafikk.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSwitchDataSource("remote")}
+              className={`text-left p-4 rounded-xl border cursor-pointer ${
+                dataSource === "remote"
+                  ? "border-emerald-300 bg-emerald-50"
+                  : "border-slate-200 bg-white hover:bg-slate-50"
+              }`}
+            >
+              <div className="text-sm font-bold text-slate-900">Ekte data</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Leser og skriver Google Sheets via Apps Script.
+              </div>
+            </button>
+          </div>
+        </div>
+      )}
       {mockLocked && (
         <div className="p-4 rounded-xl bg-amber-50 text-amber-950 border border-amber-200 text-xs">
           Appen kjører i mock-modus. Synk og opplasting mot Google Sheets er slått av.
-          For ekte data: sett <code>VITE_USE_REMOTE_DATA=true</code> i <code>.env</code> og start
-          <code> npm run dev</code> på nytt.
+          Velg <strong>Ekte data</strong> over for å koble til arket.
         </div>
       )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
@@ -139,7 +182,17 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {onOpenImport && (
+            <button
+              type="button"
+              onClick={onOpenImport}
+              className="px-3.5 py-2.5 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] text-xs font-semibold rounded-xl transition flex items-center gap-2 cursor-pointer"
+            >
+              <Database className="w-4 h-4" />
+              <span>Kildedata</span>
+            </button>
+          )}
           <button
             type="button"
             disabled={isLoading || isUploading || !remoteEnabled}
@@ -147,7 +200,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
             className="px-4 py-2.5 bg-[#2d5a3f] hover:bg-[#234731] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
-            <span>{isLoading ? "Henter fra Google Sheets..." : "Hent / Synk fra Google Sheets nå"}</span>
+            <span>{isLoading ? "Henter..." : "Hent fra Sheets"}</span>
           </button>
         </div>
       </div>

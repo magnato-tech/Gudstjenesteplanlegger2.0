@@ -1,0 +1,66 @@
+import React from "react";
+import { Check, type LucideIcon } from "lucide-react";
+
+const BASE =
+  "inline-flex items-center justify-center shrink-0 rounded-md border transition cursor-pointer";
+
+type Variant = "default" | "sky" | "confirm" | "wait" | "decline";
+
+const VARIANTS: Record<Variant, string> = {
+  default: "border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900 bg-white",
+  sky: "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800",
+  confirm:
+    "border-slate-200 text-slate-500 bg-white hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-200",
+  wait: "border-slate-200 text-slate-500 bg-white hover:bg-amber-50 hover:text-amber-800 hover:border-amber-200",
+  decline:
+    "border-slate-200 text-slate-500 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200",
+};
+
+interface IkonHandlingProps {
+  label: string;
+  Icon: LucideIcon;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  copied?: boolean;
+  active?: boolean;
+  variant?: Variant;
+  size?: "sm" | "md";
+}
+
+export const IkonHandling: React.FC<IkonHandlingProps> = ({
+  label,
+  Icon,
+  onClick,
+  copied = false,
+  active = false,
+  variant = "default",
+  size = "sm",
+}) => {
+  const dim = size === "md" ? "p-2" : "p-1.5";
+  const iconDim = size === "md" ? "w-4 h-4" : "w-3.5 h-3.5";
+  const visLabel = copied ? `${label} kopiert` : label;
+
+  let farger = copied ? "bg-emerald-50 border-emerald-300 text-emerald-700" : VARIANTS[variant];
+  if (active && variant === "confirm") {
+    farger = "bg-emerald-600 border-emerald-600 text-white";
+  } else if (active && variant === "wait") {
+    farger = "bg-amber-500 border-amber-500 text-white";
+  } else if (active && variant === "decline") {
+    farger = "bg-rose-600 border-rose-600 text-white";
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={visLabel}
+      aria-label={visLabel}
+      className={`${BASE} ${dim} ${farger}`}
+    >
+      {copied ? (
+        <Check className={`${iconDim} text-emerald-600`} />
+      ) : (
+        <Icon className={iconDim} />
+      )}
+    </button>
+  );
+};

@@ -1,18 +1,15 @@
 import React, { useState } from "react";
 import { DatabaseState, genererPersonligLenke, hentTilgang, AppView } from "../services/dataService";
 import {
-  Calendar,
   Users,
   ShieldCheck,
   UserCheck,
-  RotateCcw,
   Share2,
   Check,
-  Info,
   ChevronDown,
   Church,
-  TableProperties,
 } from "lucide-react";
+import { IkonHandling } from "./IkonHandling";
 
 interface HeaderProps {
   db: DatabaseState;
@@ -39,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showPersonDropdown, setShowPersonDropdown] = useState(false);
   const selectedPerson = db.personer.find((p) => p.PersonID === selectedPersonId);
   const tilgang = hentTilgang(db, selectedPersonId);
+  const canSwitchPerson = isAdminUser || import.meta.env.DEV;
 
   const handleCopyLink = () => {
     const link = genererPersonligLenke(
@@ -73,7 +71,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Høyre del: Person-velger & handlinger */}
           <div className="flex items-center gap-2">
-            {isAdminUser ? (
+            {canSwitchPerson ? (
               <div className="relative">
                 <button
                   type="button"
@@ -84,7 +82,9 @@ export const Header: React.FC<HeaderProps> = ({
                     {selectedPerson ? selectedPerson.Fornavn[0] : "P"}
                   </div>
                   <div className="text-left">
-                    <div className="text-[10px] text-slate-400 font-normal leading-none mb-0.5">Aktiv person (Admin):</div>
+                    <div className="text-[10px] text-slate-400 font-normal leading-none mb-0.5">
+                      {isAdminUser ? "Aktiv person (Admin):" : "Innlogget som:"}
+                    </div>
                     <div className="text-xs sm:text-sm font-semibold truncate max-w-[120px] sm:max-w-[180px] text-slate-900 leading-tight">
                       {selectedPerson?.Navn || "Velg person"}
                     </div>
@@ -95,7 +95,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {showPersonDropdown && (
                   <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2 z-50 max-h-96 overflow-y-auto">
                     <div className="px-3 py-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-                      Velg person (Admin-oversikt)
+                      {isAdminUser ? "Velg person (Admin-oversikt)" : "Velg person (utvikling)"}
                     </div>
                     {db.personer
                       .filter((p) => p.Aktiv)
@@ -121,7 +121,6 @@ export const Header: React.FC<HeaderProps> = ({
                                 {person.Navn}
                               </div>
                               <div className="text-xs text-slate-500 flex items-center gap-1.5">
-                                <span className="font-mono text-[11px]">{person.PersonID}</span>
                                 {personTilgang.isAdmin && (
                                   <span className="bg-slate-100 text-slate-800 text-[10px] px-1.5 py-0.5 rounded font-medium border border-slate-200">
                                     Admin
@@ -159,24 +158,13 @@ export const Header: React.FC<HeaderProps> = ({
               )
             )}
 
-            {/* Kopier personlig lenke */}
-            <button
-              onClick={handleCopyLink}
-              title="Kopier direkte personlig lenke"
-              className="p-2 text-slate-700 hover:text-[#2d5a3f] hover:bg-[#eef5f1] rounded-xl border border-slate-200 transition cursor-pointer flex items-center gap-1.5 text-xs font-medium"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-600" />
-                  <span className="hidden md:inline text-emerald-700 font-medium">Lenke kopiert!</span>
-                </>
-              ) : (
-                <>
-                  <Share2 className="w-4 h-4" />
-                  <span className="hidden md:inline">Kopier min lenke</span>
-                </>
-              )}
-            </button>
+            <IkonHandling
+              label="Kopier min lenke"
+              Icon={Share2}
+              onClick={() => handleCopyLink()}
+              copied={copied}
+              size="md"
+            />
           </div>
         </div>
 

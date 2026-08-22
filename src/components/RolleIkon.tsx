@@ -35,12 +35,12 @@ const FALLBACK: RolleUtseende[] = [
 ];
 
 const KJENTE: { treff: string[]; utseende: RolleUtseende }[] = [
-  { treff: ["møteleder", "leder"], utseende: { Icon: UserRound, wrap: "bg-sky-100", icon: "text-sky-500" } },
+  { treff: ["gudstjenesteleder", "møteleder"], utseende: { Icon: UserRound, wrap: "bg-sky-100", icon: "text-sky-500" } },
   { treff: ["taler", "preken"], utseende: { Icon: Mic, wrap: "bg-violet-100", icon: "text-violet-500" } },
   { treff: ["forbønn", "bønn"], utseende: { Icon: Heart, wrap: "bg-rose-100", icon: "text-rose-500" } },
   { treff: ["barnekirke", "søndagsskole"], utseende: { Icon: Smile, wrap: "bg-amber-100", icon: "text-amber-500" } },
   { treff: ["lovsang", "musikk"], utseende: { Icon: Music2, wrap: "bg-teal-100", icon: "text-teal-500" } },
-  { treff: ["lyd"], utseende: { Icon: Volume2, wrap: "bg-indigo-100", icon: "text-indigo-500" } },
+  { treff: ["teknikk", "lyd"], utseende: { Icon: Volume2, wrap: "bg-indigo-100", icon: "text-indigo-500" } },
   { treff: ["bilde", "video"], utseende: { Icon: Camera, wrap: "bg-cyan-100", icon: "text-cyan-500" } },
   { treff: ["lys"], utseende: { Icon: Lightbulb, wrap: "bg-yellow-100", icon: "text-yellow-500" } },
   { treff: ["møtevert"], utseende: { Icon: Handshake, wrap: "bg-lime-100", icon: "text-lime-600" } },
@@ -62,15 +62,16 @@ function velgUtseende(rollenavn: string): RolleUtseende {
 
 export const RolleIkon: React.FC<{ rollenavn: string; className?: string }> = ({
   rollenavn,
-  className = "",
+  className = "w-7 h-7",
 }) => {
   const { Icon, wrap, icon } = velgUtseende(rollenavn);
+  const stor = className.includes("w-10") || className.includes("w-11");
   return (
     <span
-      className={`inline-flex items-center justify-center w-7 h-7 rounded-full shrink-0 ${wrap} ${className}`}
+      className={`inline-flex items-center justify-center rounded-full shrink-0 ${wrap} ${className}`}
       aria-hidden
     >
-      <Icon className={`w-4 h-4 ${icon}`} strokeWidth={2.25} />
+      <Icon className={`${stor ? "w-5 h-5" : "w-4 h-4"} ${icon}`} strokeWidth={2.25} />
     </span>
   );
 };

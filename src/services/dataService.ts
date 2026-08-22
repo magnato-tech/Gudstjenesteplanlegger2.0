@@ -39,7 +39,9 @@ import {
   initialRollebeskrivelseImport,
 } from "../data/initialData";
 
-const STORAGE_KEY = "gudstjenesteplanlegger_db_v2";
+const MOCK_STORAGE_KEY = "gudstjenesteplanlegger_db_v2_mock";
+const REMOTE_CACHE_KEY = "gudstjenesteplanlegger_db_v2_remote";
+const DEV_SOURCE_KEY = "gudstjenesteplanlegger_dev_data_source";
 const SCRIPT_URL_STORAGE_KEY = "gudstjenesteplanlegger_apps_script_url";
 
 export const DEFAULT_REMOTE_SCRIPT_URL =
@@ -48,15 +50,57 @@ export const DEFAULT_REMOTE_SCRIPT_URL =
 /** Timeout mot Google Apps Script (dev+remote og produksjon). */
 export const REMOTE_FETCH_TIMEOUT_MS = 15_000;
 
+export type DevDataSource = "mock" | "remote";
+
 let sessionMockOverride = false;
+let devDataSource: DevDataSource | null = null;
+
+export function getDevDataSource(): DevDataSource {
+  if (import.meta.env.PROD) return "remote";
+  if (devDataSource) return devDataSource;
+  try {
+    const saved = localStorage.getItem(DEV_SOURCE_KEY);
+    if (saved === "mock" || saved === "remote") {
+      devDataSource = saved;
+      return saved;
+    }
+  } catch {
+    // Ignore
+  }
+  devDataSource = import.meta.env.VITE_USE_REMOTE_DATA === "true" ? "remote" : "mock";
+  return devDataSource;
+}
+
+export function setDevDataSource(source: DevDataSource): void {
+  if (import.meta.env.PROD) return;
+  devDataSource = source;
+  sessionMockOverride = false;
+  try {
+    localStorage.setItem(DEV_SOURCE_KEY, source);
+  } catch (e) {
+    console.error("Kunne ikke lagre datakilde:", e);
+  }
+}
+
+function currentLocalStorageKey(): string {
+  return shouldWriteToRemote() ? REMOTE_CACHE_KEY : MOCK_STORAGE_KEY;
+}
+
+function persistLocalState(state: DatabaseState): void {
+  try {
+    localStorage.setItem(currentLocalStorageKey(), JSON.stringify(state));
+  } catch (e) {
+    console.warn("Kunne ikke lagre til localStorage cache:", e);
+  }
+}
 
 /**
  * Produksjon bruker alltid Google Sheets.
- * Utvikling bruker mock med mindre VITE_USE_REMOTE_DATA=true.
+ * Utvikling: admin-valget (localStorage), ellers mock som standard.
  */
 export function useRemoteData(): boolean {
   if (import.meta.env.PROD) return true;
-  return import.meta.env.VITE_USE_REMOTE_DATA === "true";
+  return getDevDataSource() === "remote";
 }
 
 /** Dev-only: etter feilet Sheets-kall kan utvikler velge mock for denne økten. */
@@ -270,7 +314,7 @@ function korrigerLydBildeTilRigg(state: DatabaseState): {
 
 export function loadLocalDatabase(): DatabaseState {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(MOCK_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (
@@ -436,7 +480,7 @@ function applyLoadedState(state: DatabaseState): DatabaseState {
 
   if (endret) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(fixed));
+      persistLocalState(fixed);
     } catch {
       // Ignorer lagringsfeil
     }
@@ -461,11 +505,7 @@ export async function loadDatabase(): Promise<DatabaseState> {
     const payload = JSON.parse(text);
     if (payload?.ok && payload.data) {
       const state = applyLoadedState(normalizeState(payload.data));
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      } catch (err) {
-        console.warn("Kunne ikke lagre til localStorage cache:", err);
-      }
+      persistLocalState(state);
       return state;
     }
     throw new Error(payload?.error || "Ukjent svar fra Google Sheets.");
@@ -491,7 +531,7 @@ export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ s
       success: false,
       error: sessionMockOverride
         ? "Økten bruker mock-data. Last siden på nytt og hent fra Google Sheets."
-        : "Mock-modus er aktiv. Sett VITE_USE_REMOTE_DATA=true for å hente fra Google Sheets.",
+        : "Mock-modus er aktiv. Velg «Ekte data» under Admin → Google Sheets & Data.",
     };
   }
 
@@ -516,11 +556,7 @@ export async function forceSyncFromGoogleSheets(customUrl?: string): Promise<{ s
       const normalized = applyLoadedState(normalizeState(payload.data));
       // Lagre til lokal database slik at dataene sitter fast
       saveCustomScriptUrl(targetUrl);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-      } catch (err) {
-        console.warn("Kunne ikke cache i localStorage:", err);
-      }
+      persistLocalState(normalized);
       return { success: true, data: normalized };
     } else {
       return { success: false, error: payload?.error || "Ukjent format fra Google Apps Script." };
@@ -538,7 +574,7 @@ export async function uploadToGoogleSheets(state: DatabaseState, customUrl?: str
   if (!shouldWriteToRemote()) {
     return {
       success: false,
-      error: "Mock-data lastes ikke opp til Google Sheets. Aktiver VITE_USE_REMOTE_DATA=true og hent ekte data først.",
+      error: "Mock-data lastes ikke opp til Google Sheets. Velg «Ekte data» først.",
     };
   }
 
@@ -570,11 +606,7 @@ export async function uploadToGoogleSheets(state: DatabaseState, customUrl?: str
 }
 
 export function saveDatabase(state: DatabaseState): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (e) {
-    console.error("Kunne ikke lagre til localStorage:", e);
-  }
+  persistLocalState(state);
 
   if (!shouldWriteToRemote()) {
     return;
@@ -597,10 +629,51 @@ export function saveDatabase(state: DatabaseState): void {
   });
 }
 
+export function populateMockDatabase(): DatabaseState {
+  const state = applyLoadedState({
+    gruppetyper: initialGruppetyper,
+    personer: initialPersoner,
+    grupper: initialGrupper,
+    gruppemedlemmer: initialGruppemedlemmer,
+    roller: initialRoller,
+    personroller: initialPersonroller,
+    rollebeskrivelser: initialRollebeskrivelser,
+    gudstjenester: initialGudstjenester,
+    tjenestebehov: initialTjenestebehov,
+    tildelinger: initialTildelinger,
+    svar: initialSvar,
+    personerImport: initialPersonerImport,
+    gudstjenesterImport: initialGudstjenesterImport,
+    rollebeskrivelseImport: initialRollebeskrivelseImport,
+  });
+  try {
+    localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore
+  }
+  return state;
+}
+
+/** Bytt datakilde i utvikling. Mock leser/skriver aldri Google Sheets. */
+export async function switchDevDataSource(source: DevDataSource): Promise<DatabaseState> {
+  if (import.meta.env.PROD) {
+    return loadDatabase();
+  }
+  setDevDataSource(source);
+  if (source === "mock") {
+    return populateMockDatabase();
+  }
+  return loadDatabase();
+}
+
 export async function resetDatabase(): Promise<DatabaseState> {
   if (!shouldWriteToRemote()) {
-    localStorage.removeItem(STORAGE_KEY);
-    return loadLocalDatabase();
+    try {
+      localStorage.removeItem(MOCK_STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+    return populateMockDatabase();
   }
   return loadDatabase();
 }
@@ -659,6 +732,66 @@ export function getEffektivtBehov(
   return rolleObj ? rolleObj.Behov : 1;
 }
 
+export function hentSvarStatus(db: DatabaseState, tildelingId: string): SvarStatus {
+  return db.svar.find((s) => s.TildelingID === tildelingId)?.Svar || "Venter";
+}
+
+export type Bemanningstall = {
+  bekreftet: number;
+  venter: number;
+  ledige: number;
+  forfall: number;
+  behov: number;
+};
+
+export function tomtBemanningstall(): Bemanningstall {
+  return { bekreftet: 0, venter: 0, ledige: 0, forfall: 0, behov: 0 };
+}
+
+export function plusBemanningstall(a: Bemanningstall, b: Bemanningstall): Bemanningstall {
+  return {
+    bekreftet: a.bekreftet + b.bekreftet,
+    venter: a.venter + b.venter,
+    ledige: a.ledige + b.ledige,
+    forfall: a.forfall + b.forfall,
+    behov: a.behov + b.behov,
+  };
+}
+
+/** Ledige plasser: kun bekreftet fyller. Venter og forfall teller som 0. */
+export function ledigePlasserForRolle(behov: number, bekreftet: number): number {
+  return Math.max(0, behov - bekreftet);
+}
+
+export function summerBemanning(
+  db: DatabaseState,
+  gudstjenesteId: string,
+  roller: Rolle[]
+): Bemanningstall {
+  const totalt = tomtBemanningstall();
+  for (const rolle of roller) {
+    const behov = getEffektivtBehov(gudstjenesteId, rolle, db.tjenestebehov);
+    totalt.behov += behov;
+    const tildelinger = db.tildelinger.filter(
+      (t) => t.GudstjenesteID === gudstjenesteId && t.RolleID === rolle.RolleID
+    );
+    let bekreftet = 0;
+    let venter = 0;
+    let forfall = 0;
+    for (const t of tildelinger) {
+      const svar = hentSvarStatus(db, t.TildelingID);
+      if (svar === "Avvist") forfall += 1;
+      else if (svar === "Bekreftet") bekreftet += 1;
+      else venter += 1;
+    }
+    totalt.bekreftet += bekreftet;
+    totalt.venter += venter;
+    totalt.forfall += forfall;
+    totalt.ledige += ledigePlasserForRolle(behov, bekreftet);
+  }
+  return totalt;
+}
+
 /**
  * Beregner ledige oppgaver (avledet sannhet) for alle eller spesifikke gudstjenester
  */
@@ -683,14 +816,11 @@ export function beregnLedigeOppgaver(
         (t) => t.GudstjenesteID === g.GudstjenesteID && t.RolleID === r.RolleID
       );
 
-      // Aktive tildelinger: tildelinger der svar ikke er "Avvist"
-      const aktiveTildelinger = tildelingerForRolle.filter((t) => {
-        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-        return !svar || svar.Svar !== "Avvist";
-      });
-
-      const antallTildelt = aktiveTildelinger.length;
-      const ledigePlasser = Math.max(0, effektivtBehov - antallTildelt);
+      // Veiledende ledig: kun bekreftet fyller. Overbooking er tillatt.
+      const bekreftetAntall = tildelingerForRolle.filter(
+        (t) => hentSvarStatus(db, t.TildelingID) === "Bekreftet"
+      ).length;
+      const ledigePlasser = Math.max(0, effektivtBehov - bekreftetAntall);
 
       const gruppe = db.grupper.find((grp) => grp.GruppeID === r.GruppeID);
 
@@ -703,7 +833,7 @@ export function beregnLedigeOppgaver(
         Sted: g.Sted,
         Tema: g.Tema,
         EffektivtBehov: effektivtBehov,
-        AntallTildelt: antallTildelt,
+        AntallTildelt: bekreftetAntall,
         LedigePlasser: ledigePlasser,
         AnsvarligGruppeID: r.GruppeID,
         AnsvarligGruppeNavn: gruppe ? gruppe.Gruppenavn : undefined,
@@ -716,7 +846,8 @@ export function beregnLedigeOppgaver(
 
 /**
  * Frivillig påmelding:
- * Finner ledige oppgaver som matcher personens aktive Personroller og der det er ledig kapasitet.
+ * Finner oppgaver som matcher personens aktive Personroller.
+ * Behovstall er veiledende; overbooking er tillatt.
  */
 export function finnLedigeOppgaverForPerson(
   db: DatabaseState,
@@ -734,10 +865,7 @@ export function finnLedigeOppgaverForPerson(
     // 1. Rollen må matche personens aktive roller
     if (!personensRoller.includes(oppgave.RolleID)) return false;
 
-    // 2. Det må faktisk være ledige plasser
-    if (oppgave.LedigePlasser <= 0) return false;
-
-    // 3. Personen må ikke allerede være tildelt denne rollen på denne gudstjenesten
+    // 2. Personen må ikke allerede være tildelt denne rollen på denne gudstjenesten
     const alleredeTildelt = db.tildelinger.some(
       (t) =>
         t.GudstjenesteID === oppgave.GudstjenesteID &&
@@ -751,9 +879,10 @@ export function finnLedigeOppgaverForPerson(
 
 /**
  * Atomisk frivillig påmelding:
- * 1. Validerer personrolle og kapasitet
+ * 1. Validerer personrolle
  * 2. Oppretter Tildeling
  * 3. Oppretter Svar med "Bekreftet"
+ * Behovstall er veiledende — overbooking er tillatt.
  */
 export function meldPaaFrivillig(
   db: DatabaseState,
@@ -779,18 +908,7 @@ export function meldPaaFrivillig(
     };
   }
 
-  // 3. Valider kapasitet
-  const ledige = beregnLedigeOppgaver(db, gudstjenesteID).find(
-    (o) => o.RolleID === rolleID
-  );
-  if (!ledige || ledige.LedigePlasser <= 0) {
-    return {
-      success: false,
-      message: "Det er dessverre ingen ledige plasser igjen for denne rollen.",
-    };
-  }
-
-  // 4. Valider at personen ikke allerede er tildelt denne rollen på denne datoen
+  // 3. Valider at personen ikke allerede er tildelt denne rollen på denne datoen
   const eksisterende = db.tildelinger.find(
     (t) =>
       t.GudstjenesteID === gudstjenesteID &&
@@ -1398,6 +1516,10 @@ function nesteNummerertId<T>(records: T[], field: keyof T, prefix: string): stri
     return !isNaN(num) && num > acc ? num : acc;
   }, 0);
   return `${prefix}${String(max + 1).padStart(3, "0")}`;
+}
+
+export function nesteGruppeId(grupper: Gruppe[]): string {
+  return nesteNummerertId(grupper, "GruppeID", "G");
 }
 
 export function nesteGruppeMedlemId(gruppemedlemmer: Gruppemedlem[]): string {

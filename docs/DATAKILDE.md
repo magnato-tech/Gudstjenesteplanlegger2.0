@@ -2,28 +2,19 @@
 
 ## Hvordan utvikler bruker mock-data
 
-På localhost er mock standard.
+På localhost er mock standard. Velg **Mock-data** i Administrator (knapper øverst, eller fanen Google Sheets & Data). Det populerer testdata fra `src/data/initialData.ts`. Mock har egen localStorage-nøkkel og leser/skriver **ikke** Google Sheets.
 
 ```bash
 npm run dev
 ```
 
-La `VITE_USE_REMOTE_DATA` være unset eller `false` (se `.env.example`). Appen leser `localStorage` (`gudstjenesteplanlegger_db_v2`) eller `src/data/initialData.ts`. Endringer lagres kun lokalt og sendes ikke til Google Sheets.
-
 ## Hvordan utvikler tester ekte Google Sheets lokalt
 
-1. Kopier `.env.example` til `.env`.
-2. Sett:
+Velg **Ekte data** i Administrator. Appen henter da `/gas-api?action=load` (15 s timeout) og lagrer endringer til arket.
 
-```
-VITE_USE_REMOTE_DATA=true
-```
+Hvis kallet feiler: **Prøv igjen**, eller **Bruk mock-data**. Valget huskes i nettleseren (`gudstjenesteplanlegger_dev_data_source`).
 
-3. Stopp og start `npm run dev` på nytt (Vite leser env ved oppstart).
-
-Appen kaller da `/gas-api?action=load` (proxy mot Apps Script). Timeout er 15 sekunder.
-
-Hvis kallet feiler, vises feil + **Prøv igjen**. I utvikling vises også **Bruk mock-data** for denne økten. Mock-fallback skriver ikke til arket. Last siden på nytt for å prøve Sheets igjen.
+`VITE_USE_REMOTE_DATA=true` i `.env` brukes bare som startvalg hvis du ikke har valgt i admin ennå.
 
 ## Hvordan produksjon bruker Google Sheets
 

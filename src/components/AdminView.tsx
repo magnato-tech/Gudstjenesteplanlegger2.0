@@ -1,10 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   DatabaseState,
   UkjentImportSlot,
   finnUkjenteImportnavn,
   finnTjenestegrupperForPerson,
   getEffektivtBehov,
+  hentSvarStatus,
+  summerBemanning,
+  tomtBemanningstall,
+  plusBemanningstall,
+  Bemanningstall,
   genererPersonligLenke,
   opprettPersonIRegister,
   saveDatabase,
@@ -17,42 +22,51 @@ import {
   Gudstjeneste,
   Tildeling,
   Tjenestebehov,
+  SvarStatus,
 } from "../types/database";
-import { RoleDescriptionModal } from "./RoleDescriptionModal";
+import { RoleDescriptionModal, oppsummerInstruks } from "./RoleDescriptionModal";
 import { ImportMigrationModal } from "./ImportMigrationModal";
 import { GroupAdminModal } from "./GroupAdminModal";
 import { GoogleSheetsSync } from "./GoogleSheetsSync";
+import { GroupDetailModal } from "./GroupDetailModal";
+import { NewGroupModal } from "./NewGroupModal";
 import { RolleIkon } from "./RolleIkon";
+import { IkonHandling } from "./IkonHandling";
 import {
   Calendar,
   Users,
+  UsersRound,
   Shield,
   Layers,
   Plus,
   Trash2,
-  Edit2,
   Share2,
   Check,
-  CheckCircle2,
-  XCircle,
-  HelpCircle,
   Search,
   Filter,
   Star,
-  Database,
   Sliders,
   AlertTriangle,
-  ChevronDown,
   FileSpreadsheet,
   Clock,
+  Eye,
+  LayoutGrid,
+  List,
   X,
   UserPlus,
+  ChevronDown,
+  ChevronRight,
+  AlertCircle,
+  CircleHelp,
+  CheckCircle2,
 } from "lucide-react";
 
 interface AdminViewProps {
   db: DatabaseState;
   onUpdateDb: (updatedDb: DatabaseState) => void;
-  onSelectPerson: (personId: string) => void;
+  onSelectPerson: (personId: string, view?: AppView) => void;
+  dataSource?: "mock" | "remote";
+  onSwitchDataSource?: (source: "mock" | "remote") => void;
 }
 
 const GRUPPEFILTER = [
@@ -79,17 +93,151 @@ function antallGrupperForFilter(db: DatabaseState, filterId: string): number {
   return db.grupper.filter((g) => ids.includes(g.GruppetypeID)).length;
 }
 
+function antallMedlemmerIGruppe(db: DatabaseState, gruppe: { GruppeID: string; GruppelederID?: string; NestlederID?: string }): number {
+  const ids = new Set(
+    db.gruppemedlemmer
+      .filter((gm) => gm.GruppeID === gruppe.GruppeID && gm.Aktiv)
+      .map((gm) => gm.PersonID)
+  );
+  if (gruppe.GruppelederID) ids.add(gruppe.GruppelederID);
+  if (gruppe.NestlederID) ids.add(gruppe.NestlederID);
+  return ids.size;
+}
+
+function ikonNavnForGruppe(
+  db: DatabaseState,
+  gruppe: { GruppeID: string; Gruppenavn: string }
+): string {
+  const roller = db.roller.filter((r) => r.Aktiv && r.GruppeID === gruppe.GruppeID);
+  if (roller.length === 1) return roller[0].Rollenavn;
+  if (roller.length > 1) {
+    const nøkkel = gruppe.Gruppenavn.toLowerCase();
+    const treff = roller.find(
+      (r) =>
+        nøkkel.includes(r.Rollenavn.toLowerCase()) ||
+        r.Rollenavn.toLowerCase().split(/\s+/).some((ord) => ord.length > 2 && nøkkel.includes(ord))
+    );
+    return treff?.Rollenavn || roller[0].Rollenavn;
+  }
+  return gruppe.Gruppenavn;
+}
+
+const UTEN_GRUPPE = "__uten__";
+
+type OversiktFilter = "bekreftet" | "venter" | "ledige" | "medlemmer" | null;
+
+function iDagIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDatoKort(dato: string): string {
+  const parsed = new Date(`${dato}T12:00:00`);
+  if (isNaN(parsed.getTime())) return dato;
+  return parsed.toLocaleDateString("nb-NO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function bemanningForRolle(
+  db: DatabaseState,
+  gudstjenesteId: string,
+  rolle: Rolle
+): Bemanningstall {
+  return summerBemanning(db, gudstjenesteId, [rolle]);
+}
+
+function unikeTjenestemedlemmer(db: DatabaseState): number {
+  const gruppeIds = new Set(
+    db.roller.filter((r) => r.Aktiv && r.GruppeID).map((r) => r.GruppeID as string)
+  );
+  const ids = new Set<string>();
+  for (const gruppe of db.grupper) {
+    if (!gruppeIds.has(gruppe.GruppeID)) continue;
+    for (const gm of db.gruppemedlemmer) {
+      if (gm.GruppeID === gruppe.GruppeID && gm.Aktiv) ids.add(gm.PersonID);
+    }
+    if (gruppe.GruppelederID) ids.add(gruppe.GruppelederID);
+    if (gruppe.NestlederID) ids.add(gruppe.NestlederID);
+  }
+  return ids.size;
+}
+
+function trefferOversiktFilter(tall: Bemanningstall, filter: OversiktFilter): boolean {
+  if (!filter || filter === "medlemmer") return true;
+  if (filter === "ledige") return tall.ledige > 0;
+  if (filter === "venter") return tall.venter > 0;
+  return tall.bekreftet > 0;
+}
+
+type GruppeRad = {
+  gruppeId: string;
+  gruppenavn: string;
+  lederId?: string;
+  lederNavn?: string;
+  lederFornavn?: string;
+  tall: Bemanningstall;
+  roller: Rolle[];
+};
+
+function gruppeRaderForGudstjeneste(
+  db: DatabaseState,
+  gudstjenesteId: string,
+  alleRoller = false
+): GruppeRad[] {
+  const byId = new Map<string, GruppeRad>();
+  for (const rolle of db.roller.filter((r) => r.Aktiv)) {
+    const tall = bemanningForRolle(db, gudstjenesteId, rolle);
+    const harNoe =
+      tall.behov > 0 || tall.bekreftet > 0 || tall.venter > 0 || tall.forfall > 0;
+    if (!alleRoller && !harNoe) continue;
+    const gruppeId = rolle.GruppeID || UTEN_GRUPPE;
+    const eksisterende = byId.get(gruppeId);
+    if (eksisterende) {
+      eksisterende.tall = plusBemanningstall(eksisterende.tall, tall);
+      eksisterende.roller.push(rolle);
+      continue;
+    }
+    const gruppe = db.grupper.find((g) => g.GruppeID === gruppeId);
+    const leder = gruppe?.GruppelederID
+      ? db.personer.find((p) => p.PersonID === gruppe.GruppelederID)
+      : undefined;
+    byId.set(gruppeId, {
+      gruppeId,
+      gruppenavn: gruppe?.Gruppenavn || "Uten gruppe",
+      lederId: leder?.PersonID,
+      lederNavn: leder?.Navn,
+      lederFornavn: leder?.Fornavn || leder?.Navn,
+      tall,
+      roller: [rolle],
+    });
+  }
+  return Array.from(byId.values()).sort((a, b) =>
+    a.gruppenavn.localeCompare(b.gruppenavn, "nb")
+  );
+}
+
+function summerGruppeRader(rader: GruppeRad[]): Bemanningstall {
+  return rader.reduce((acc, rad) => plusBemanningstall(acc, rad.tall), tomtBemanningstall());
+}
+
 export const AdminView: React.FC<AdminViewProps> = ({
   db,
   onUpdateDb,
   onSelectPerson,
+  dataSource = "mock",
+  onSwitchDataSource,
 }) => {
   const [activeTab, setActiveTab] = useState<"services" | "people" | "groups" | "roles" | "sync">(
     "services"
   );
   const [groupTypeFilter, setGroupTypeFilter] = useState("tjenestegruppe");
-  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [detailGruppeId, setDetailGruppeId] = useState<string | null>(null);
   const [editingGruppeId, setEditingGruppeId] = useState<string | null>(null);
+  const [newGroupModal, setNewGroupModal] = useState(false);
+  const [groupOverviewView, setGroupOverviewView] = useState<"grid" | "list">("grid");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedGroupFilter, setSelectedGroupFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState<"all" | "leaders" | "admins" | "members">("all");
@@ -130,6 +278,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
     rolleNavn: string;
   } | null>(null);
   const [personToAssign, setPersonToAssign] = useState<string>("");
+  const [apneGudstjenester, setApneGudstjenester] = useState<string[]>([]);
+  const [visTidligere, setVisTidligere] = useState(false);
+  const [folgOppLederId, setFolgOppLederId] = useState<string | null>(null);
+  const [oversiktFilter, setOversiktFilter] = useState<OversiktFilter>(null);
 
   const ukjenteImportnavn = finnUkjenteImportnavn(db);
 
@@ -308,10 +460,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
       SistEndret: now,
     };
 
-    const updatedDb: DatabaseState = {
-      ...db,
-      tildelinger: [...db.tildelinger, nyTildeling],
-    };
+    const updatedDb = svarPaaTildeling(
+      {
+        ...db,
+        tildelinger: [...db.tildelinger, nyTildeling],
+      },
+      newTildelingID,
+      personToAssign,
+      "Venter",
+      "Forespurt av administrator"
+    );
 
     saveDatabase(updatedDb);
     onUpdateDb(updatedDb);
@@ -348,16 +506,48 @@ export const AdminView: React.FC<AdminViewProps> = ({
     onUpdateDb(updatedDb);
   };
 
-  const handleSettRolleGruppe = (rolleId: string, gruppeId: string) => {
+  const handleOppdaterRolle = (
+    rolleId: string,
+    patch: { GruppeID?: string; Behov?: number }
+  ) => {
     const now = new Date().toISOString().split("T")[0];
     const updatedDb: DatabaseState = {
       ...db,
       roller: db.roller.map((r) =>
         r.RolleID === rolleId
-          ? { ...r, GruppeID: gruppeId || undefined, SistEndret: now }
+          ? {
+              ...r,
+              ...("GruppeID" in patch ? { GruppeID: patch.GruppeID || undefined } : {}),
+              ...("Behov" in patch && patch.Behov !== undefined ? { Behov: patch.Behov } : {}),
+              SistEndret: now,
+            }
           : r
       ),
     };
+    saveDatabase(updatedDb);
+    onUpdateDb(updatedDb);
+  };
+
+  const handleLagreRolleinstruks = (rolleId: string, tekst: string) => {
+    const now = new Date().toISOString().split("T")[0];
+    const eksisterer = db.rollebeskrivelser.some((rb) => rb.RolleID === rolleId);
+    const rollebeskrivelser = eksisterer
+      ? db.rollebeskrivelser.map((rb) =>
+          rb.RolleID === rolleId
+            ? { ...rb, Rollebeskrivelse: tekst, SistEndret: now }
+            : rb
+        )
+      : [
+          ...db.rollebeskrivelser,
+          {
+            RolleID: rolleId,
+            Rollebeskrivelse: tekst,
+            Aktiv: true,
+            OpprettetDato: now,
+            SistEndret: now,
+          },
+        ];
+    const updatedDb: DatabaseState = { ...db, rollebeskrivelser };
     saveDatabase(updatedDb);
     onUpdateDb(updatedDb);
   };
@@ -388,44 +578,466 @@ export const AdminView: React.FC<AdminViewProps> = ({
     return true;
   });
 
-  return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* Topp-overskrift & hurtighandlinger */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-[#2d5a3f] uppercase tracking-wider">
-            <Shield className="w-4 h-4" />
-            <span>Administratorpanel</span>
-          </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mt-0.5">
-            Gudstjenesteplanlegging & Masterdata
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Full tilgang til alle gudstjenester, personer, grupper, roller og kildedata.
-          </p>
-        </div>
+  const iDag = iDagIso();
+  const sorterteGudstjenester = db.gudstjenester.slice().sort((a, b) =>
+    `${a.Dato} ${a.Tid}`.localeCompare(`${b.Dato} ${b.Tid}`)
+  );
+  const kommendeGudstjenester = sorterteGudstjenester.filter((g) => g.Dato >= iDag);
+  const tidligereGudstjenester = sorterteGudstjenester.filter((g) => g.Dato < iDag).reverse();
 
-        <div className="flex items-center gap-2 flex-wrap">
+  const lederOppfolging = (() => {
+    const perLeder = new Map<
+      string,
+      { personId: string; fornavn: string; navn: string; sondager: Set<string> }
+    >();
+    for (const gud of kommendeGudstjenester) {
+      for (const rad of gruppeRaderForGudstjeneste(db, gud.GudstjenesteID)) {
+        if (rad.tall.ledige <= 0 || !rad.lederId) continue;
+        const eksisterende = perLeder.get(rad.lederId);
+        if (eksisterende) {
+          eksisterende.sondager.add(gud.GudstjenesteID);
+        } else {
+          perLeder.set(rad.lederId, {
+            personId: rad.lederId,
+            fornavn: rad.lederFornavn || rad.lederNavn || "Leder",
+            navn: rad.lederNavn || rad.lederFornavn || "Leder",
+            sondager: new Set([gud.GudstjenesteID]),
+          });
+        }
+      }
+    }
+    return Array.from(perLeder.values()).sort((a, b) => b.sondager.size - a.sondager.size);
+  })();
+
+  const semesterOversikt = kommendeGudstjenester.reduce(
+    (acc, gud) =>
+      plusBemanningstall(
+        acc,
+        summerBemanning(
+          db,
+          gud.GudstjenesteID,
+          db.roller.filter((r) => r.Aktiv)
+        )
+      ),
+    tomtBemanningstall()
+  );
+  const ledigeOgForfall = semesterOversikt.ledige;
+  const bekreftetProsent =
+    semesterOversikt.behov > 0
+      ? Math.round((semesterOversikt.bekreftet / semesterOversikt.behov) * 100)
+      : 0;
+  const medlemstall = unikeTjenestemedlemmer(db);
+
+  const visKommendeGudstjenester = kommendeGudstjenester.filter((gud) => {
+    const rader = gruppeRaderForGudstjeneste(db, gud.GudstjenesteID);
+    const totalt = summerGruppeRader(rader);
+    if (folgOppLederId) {
+      const lederTreff = rader.some(
+        (rad) => rad.lederId === folgOppLederId && rad.tall.ledige > 0
+      );
+      if (!lederTreff) return false;
+    }
+    return trefferOversiktFilter(totalt, oversiktFilter);
+  });
+
+  const visTidligereFiltrert = tidligereGudstjenester.filter((gud) => {
+    const totalt = summerGruppeRader(gruppeRaderForGudstjeneste(db, gud.GudstjenesteID));
+    return trefferOversiktFilter(totalt, oversiktFilter);
+  });
+
+  useEffect(() => {
+    if (oversiktFilter !== "venter") return;
+    const ids = db.gudstjenester
+      .filter((gud) => gud.Dato >= iDag)
+      .filter((gud) =>
+        trefferOversiktFilter(
+          summerGruppeRader(gruppeRaderForGudstjeneste(db, gud.GudstjenesteID)),
+          "venter"
+        )
+      )
+      .map((gud) => gud.GudstjenesteID);
+    setApneGudstjenester(ids);
+  }, [oversiktFilter, db, iDag]);
+
+  const velgOversiktFilter = (neste: Exclude<OversiktFilter, null>) => {
+    const aktiv: OversiktFilter = oversiktFilter === neste ? null : neste;
+    setOversiktFilter(aktiv);
+    if (aktiv === "medlemmer") {
+      setActiveTab("groups");
+      setGroupTypeFilter("tjenestegruppe");
+    }
+  };
+
+  const vekselFolgOppLeder = (personId: string) => {
+    setFolgOppLederId((prev) => (prev === personId ? null : personId));
+  };
+
+  const vekselApne = (id: string) => {
+    setApneGudstjenester((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const renderRolleRad = (gudstjenesteId: string, rolle: Rolle) => {
+    const effektivtBehov = getEffektivtBehov(gudstjenesteId, rolle, db.tjenestebehov);
+    const isOverridden = db.tjenestebehov.some(
+      (tb) =>
+        tb.GudstjenesteID === gudstjenesteId && tb.RolleID === rolle.RolleID && tb.Aktiv
+    );
+    const tildelinger = db.tildelinger.filter(
+      (t) => t.GudstjenesteID === gudstjenesteId && t.RolleID === rolle.RolleID
+    );
+    const antallBekreftet = tildelinger.filter(
+      (t) => hentSvarStatus(db, t.TildelingID) === "Bekreftet"
+    ).length;
+    const erFull = antallBekreftet >= effektivtBehov;
+
+    return (
+      <div
+        key={rolle.RolleID}
+        className="px-3 py-2 flex flex-col lg:grid lg:grid-cols-12 gap-2 lg:items-center"
+      >
+        <div className="lg:col-span-4 flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setActiveTab("sync")}
-            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            onClick={() => setSelectedRolleForModal(rolle)}
+            title="Se instruks"
+            className="flex items-center gap-3 min-w-0 text-left cursor-pointer rounded-xl hover:bg-slate-100/80 -ml-1 px-1 py-0.5"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
-            <span>Google Sheets & Synk</span>
+            <RolleIkon rollenavn={rolle.Rollenavn} />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+              {rolle.Rollenavn}
+            </span>
           </button>
-
           <button
             type="button"
-            onClick={() => setShowImportModal(true)}
-            className="px-3.5 py-2 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            onClick={() => {
+              setEditNeedModal({
+                gudstjenesteId,
+                rolleId: rolle.RolleID,
+                currentBehov: effektivtBehov,
+                rolleNavn: rolle.Rollenavn,
+              });
+              setCustomNeedInput(effektivtBehov);
+            }}
+            title="Veiledende antall. Overbooking er greit."
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition shrink-0 ${
+              erFull
+                ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                : "bg-slate-100 text-slate-700 hover:bg-rose-50 hover:text-rose-800"
+            }`}
           >
-            <Database className="w-4 h-4" />
-            <span>Kildedata & Migrering</span>
+            <span>
+              {antallBekreftet} / {effektivtBehov}
+            </span>
+            <Sliders className="w-2.5 h-2.5 opacity-60" />
+          </button>
+          {isOverridden && (
+            <span className="text-[9px] text-[#2d5a3f] bg-[#eef5f1] border border-[#d2e8d9] px-1 rounded shrink-0">
+              Std: {rolle.Behov}
+            </span>
+          )}
+        </div>
+        <div className="lg:col-span-8 flex flex-wrap items-center gap-1.5">
+          {tildelinger.map((t) => {
+            const p = db.personer.find((pers) => pers.PersonID === t.PersonID);
+            const status = hentSvarStatus(db, t.TildelingID);
+            const isBekreftet = status === "Bekreftet";
+            const isAvvist = status === "Avvist";
+            const visningsnavn = p?.Fornavn || p?.Navn || "Ukjent";
+            return (
+              <div
+                key={t.TildelingID}
+                className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-xl text-xs border ${
+                  isBekreftet
+                    ? "bg-emerald-50/80 border-emerald-200 text-emerald-950 font-medium"
+                    : isAvvist
+                    ? "bg-rose-50/80 border-rose-200 text-rose-800"
+                    : "bg-amber-50/80 border-amber-200 text-amber-950 font-medium"
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    isBekreftet ? "bg-emerald-500" : isAvvist ? "bg-rose-500" : "bg-amber-400"
+                  }`}
+                  title={
+                    isBekreftet
+                      ? "Bekreftet"
+                      : isAvvist
+                      ? "Meldt forfall / Kan ikke"
+                      : "Forespurt (venter svar)"
+                  }
+                />
+                <span
+                  className={`max-w-[120px] truncate ${isAvvist ? "line-through opacity-75" : ""}`}
+                  title={p?.Navn || visningsnavn}
+                >
+                  {visningsnavn}
+                </span>
+                <IkonHandling
+                  label="Bekreft (personen har sagt ja)"
+                  Icon={Check}
+                  variant="confirm"
+                  active={isBekreftet}
+                  onClick={() => handleUpdatePersonStatus(t.TildelingID, t.PersonID, "Bekreftet")}
+                />
+                <IkonHandling
+                  label="Sett status til forespurt / venter svar"
+                  Icon={Clock}
+                  variant="wait"
+                  active={status === "Venter"}
+                  onClick={() => handleUpdatePersonStatus(t.TildelingID, t.PersonID, "Venter")}
+                />
+                <IkonHandling
+                  label="Marker som forfall / kan ikke"
+                  Icon={X}
+                  variant="decline"
+                  active={isAvvist}
+                  onClick={() => handleUpdatePersonStatus(t.TildelingID, t.PersonID, "Avvist")}
+                />
+                <IkonHandling
+                  label="Fjern tildeling"
+                  Icon={Trash2}
+                  variant="decline"
+                  onClick={() => handleRemoveTildeling(t.TildelingID)}
+                />
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() =>
+              setAssignModal({
+                gudstjenesteId,
+                rolleId: rolle.RolleID,
+                rolleNavn: rolle.Rollenavn,
+              })
+            }
+            className="px-2.5 py-1 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition shadow-2xs shrink-0"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Tildel</span>
           </button>
         </div>
       </div>
+    );
+  };
 
+  const renderGudstjenesteKort = (gudstjeneste: Gudstjeneste) => {
+    const visAlleTall = !oversiktFilter || oversiktFilter === "medlemmer";
+    const alleRader = gruppeRaderForGudstjeneste(
+      db,
+      gudstjeneste.GudstjenesteID,
+      visAlleTall
+    );
+    const totalt = summerGruppeRader(
+      gruppeRaderForGudstjeneste(db, gudstjeneste.GudstjenesteID, false)
+    );
+    const rader = visAlleTall
+      ? alleRader
+      : alleRader.filter((rad) => trefferOversiktFilter(rad.tall, oversiktFilter));
+    const hullGrupper = alleRader.filter((r) => r.tall.ledige > 0);
+    const venterGrupper = alleRader.filter((r) => r.tall.venter > 0);
+    const erApen = apneGudstjenester.includes(gudstjeneste.GudstjenesteID);
+    const kant = visAlleTall
+      ? totalt.ledige > 0
+        ? "border-l-[3px] border-l-rose-400"
+        : totalt.venter > 0
+          ? "border-l-[3px] border-l-amber-400"
+          : "border-l-[3px] border-l-transparent opacity-80"
+      : oversiktFilter === "ledige"
+        ? "border-l-[3px] border-l-rose-400"
+        : oversiktFilter === "venter"
+          ? "border-l-[3px] border-l-amber-400"
+          : "border-l-[3px] border-l-emerald-400";
+
+    return (
+      <div
+        key={gudstjeneste.GudstjenesteID}
+        className={`bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden ${kant}`}
+      >
+        <button
+          type="button"
+          onClick={() => vekselApne(gudstjeneste.GudstjenesteID)}
+          aria-expanded={erApen}
+          className="w-full text-left px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50/80 cursor-pointer"
+        >
+          {erApen ? (
+            <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline gap-x-1.5 text-sm">
+              <span className="font-semibold text-[#2d5a3f]">
+                {formatDatoKort(gudstjeneste.Dato)}
+                {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
+              </span>
+              <span className="font-bold text-slate-900 truncate">
+                {gudstjeneste.Tema || "Gudstjeneste"}
+              </span>
+              {gudstjeneste.Sted && (
+                <span className="hidden sm:inline text-xs text-slate-500 truncate">
+                  · {gudstjeneste.Sted}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-slate-600 mt-0.5">
+              {visAlleTall ? (
+                hullGrupper.length > 0 ? (
+                  <>
+                    <span className="font-semibold text-rose-800">
+                      {totalt.ledige} ledige
+                    </span>
+                    <span className="text-slate-500">
+                      {" · "}
+                      {hullGrupper.map((g) => g.gruppenavn).join(", ")}
+                    </span>
+                  </>
+                ) : totalt.venter > 0 ? (
+                  <span className="font-semibold text-amber-800">{totalt.venter} venter</span>
+                ) : (
+                  <span className="text-emerald-700 font-medium">Komplett</span>
+                )
+              ) : oversiktFilter === "ledige" ? (
+                <span className="font-semibold text-rose-800">
+                  {totalt.ledige} ledige
+                  {hullGrupper.length > 0 ? ` · ${hullGrupper.map((g) => g.gruppenavn).join(", ")}` : ""}
+                </span>
+              ) : oversiktFilter === "venter" ? (
+                <span className="font-semibold text-amber-800">
+                  {totalt.venter} venter
+                  {venterGrupper.length > 0
+                    ? ` · ${venterGrupper.map((g) => g.gruppenavn).join(", ")}`
+                    : ""}
+                </span>
+              ) : (
+                <span className="font-semibold text-emerald-800">{totalt.bekreftet} bekreftet</span>
+              )}
+            </div>
+          </div>
+          <div className="hidden md:flex items-center gap-2 text-[11px] tabular-nums font-semibold shrink-0">
+            {visAlleTall ? (
+              <>
+                <span className={totalt.bekreftet ? "text-emerald-700" : "text-slate-400"}>
+                  {totalt.bekreftet} bekr.
+                </span>
+                <span className={totalt.venter ? "text-amber-800" : "text-slate-400"}>
+                  {totalt.venter} venter
+                </span>
+                <span className={totalt.ledige ? "text-rose-800" : "text-slate-400"}>
+                  {totalt.ledige} ledige
+                </span>
+              </>
+            ) : oversiktFilter === "bekreftet" ? (
+              <span className="text-emerald-700">{totalt.bekreftet} bekr.</span>
+            ) : oversiktFilter === "venter" ? (
+              <span className="text-amber-800">{totalt.venter} venter</span>
+            ) : (
+              <span className="text-rose-800">{totalt.ledige} ledige</span>
+            )}
+          </div>
+        </button>
+
+        {erApen && (
+          <div className="border-t border-slate-100">
+            {(gudstjeneste.Bibeltekst || gudstjeneste.Kollekt) && (
+              <div className="px-4 py-2 text-xs text-slate-600 flex flex-wrap gap-3 bg-slate-50/50">
+                {gudstjeneste.Bibeltekst && (
+                  <span>
+                    Bibeltekst:{" "}
+                    <span className="font-medium text-slate-800">{gudstjeneste.Bibeltekst}</span>
+                  </span>
+                )}
+                {gudstjeneste.Kollekt && (
+                  <span>
+                    Kollekt:{" "}
+                    <span className="font-medium text-[#2d5a3f]">{gudstjeneste.Kollekt}</span>
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="divide-y divide-slate-100">
+              {rader.map((rad) => {
+                const komplett = rad.tall.ledige === 0 && rad.tall.venter === 0;
+                const visRoller = visAlleTall
+                  ? rad.roller
+                  : rad.roller.filter((rolle) =>
+                      trefferOversiktFilter(
+                        bemanningForRolle(db, gudstjeneste.GudstjenesteID, rolle),
+                        oversiktFilter
+                      )
+                    );
+                return (
+                  <div
+                    key={rad.gruppeId}
+                    className={`px-4 py-2.5 ${visAlleTall && komplett ? "opacity-70" : ""}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-sm text-slate-900 min-w-[7rem]">
+                        {rad.gruppenavn}
+                      </span>
+                      <span className="text-xs text-slate-600 min-w-[6rem]">
+                        {rad.lederNavn || "Ingen leder"}
+                      </span>
+                      <span className="text-[11px] tabular-nums font-semibold flex items-center gap-2">
+                        <span className={rad.tall.bekreftet ? "text-emerald-700" : "text-slate-400"}>
+                          {rad.tall.bekreftet} bekr.
+                        </span>
+                        <span className={rad.tall.venter ? "text-amber-800" : "text-slate-400"}>
+                          {rad.tall.venter} venter
+                        </span>
+                        <span className={rad.tall.ledige ? "text-rose-800" : "text-slate-400"}>
+                          {rad.tall.ledige} ledige
+                        </span>
+                      </span>
+                      <div className="flex items-center gap-1 ml-auto">
+                        {rad.lederId && (
+                          <>
+                            <IkonHandling
+                              label="Kopier leder-lenke"
+                              Icon={Share2}
+                              variant="sky"
+                              copied={copiedPersonId === `${rad.lederId}-leader`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopyLink(rad.lederId!, "leader");
+                              }}
+                            />
+                            <IkonHandling
+                              label="Se som denne lederen"
+                              Icon={Eye}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSelectPerson(rad.lederId!, "leader");
+                              }}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {visRoller.length > 0 && (
+                      <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/60 divide-y divide-slate-100">
+                        {visRoller.map((rolle) =>
+                          renderRolleRad(gudstjeneste.GudstjenesteID, rolle)
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {rader.length === 0 && (
+                <p className="px-4 py-4 text-sm text-slate-500">Ingen roller med behov denne dagen.</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
       {ukjenteImportnavn.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
           <div className="flex items-start gap-2">
@@ -449,7 +1061,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   <div className="text-sm font-semibold text-slate-900">{item.navn}</div>
                   <div className="text-xs text-slate-600">
                     {item.slots
-                      .map((s) => `${s.rolleNavn} · ${s.gudstjenesteId}${s.dato ? ` (${s.dato})` : ""}`)
+                      .map((s) => (s.dato ? `${s.rolleNavn} · ${s.dato}` : s.rolleNavn))
                       .join(" · ")}
                   </div>
                 </div>
@@ -500,7 +1112,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
               : "border-transparent text-slate-600 hover:text-slate-900"
           }`}
         >
-          <Users className="w-4 h-4" />
+          <UsersRound className="w-4 h-4" />
           <span>Grupper ({db.grupper.length})</span>
         </button>
 
@@ -531,414 +1143,182 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       {/* FANE 1: GUDSTJENESTER & OPPGAVEPLAN (LISTEFORM MED ADMIN-KONTROLLER) */}
       {activeTab === "services" && (
-        <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">
-                Gudstjenester & oppgaveplan
-              </h3>
-              <p className="text-xs text-slate-500">
-                Oversikt over oppgaver per gudstjeneste. Tildel personer, send forespørsler og bekreft status direkte i listen.
-              </p>
+        <div className="space-y-4">
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Semesteret totalt
+                </p>
+                <p className="text-sm text-slate-600">
+                  Alle tjenestegrupper på kommende gudstjenester. Trykk et kort for å filtrere.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNewServiceModal(true)}
+                className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Ny gudstjeneste</span>
+              </button>
             </div>
-            <button
-              onClick={() => setNewServiceModal(true)}
-              className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Ny gudstjeneste</span>
-            </button>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {(
+                [
+                  {
+                    id: "ledige" as const,
+                    tall: ledigeOgForfall,
+                    label: "Ledige slotter / Forfall",
+                    Icon: AlertCircle,
+                    wrap: "bg-rose-50 border-rose-100 text-rose-950",
+                    icon: "text-rose-500",
+                    aktiv: "ring-2 ring-rose-400",
+                  },
+                  {
+                    id: "venter" as const,
+                    tall: semesterOversikt.venter,
+                    label: "Venter på svar",
+                    Icon: CircleHelp,
+                    wrap: "bg-amber-50 border-amber-100 text-amber-950",
+                    icon: "text-amber-500",
+                    aktiv: "ring-2 ring-amber-400",
+                  },
+                  {
+                    id: "bekreftet" as const,
+                    tall: semesterOversikt.bekreftet,
+                    label: `Bekreftet (${bekreftetProsent}%)`,
+                    Icon: CheckCircle2,
+                    wrap: "bg-emerald-50 border-emerald-100 text-emerald-900",
+                    icon: "text-emerald-600",
+                    aktiv: "ring-2 ring-emerald-400",
+                  },
+                  {
+                    id: "medlemmer" as const,
+                    tall: medlemstall,
+                    label: "Medlemmer",
+                    Icon: Users,
+                    wrap: "bg-sky-50 border-sky-100 text-sky-950",
+                    icon: "text-sky-600",
+                    aktiv: "ring-2 ring-sky-300",
+                  },
+                ]
+              ).map((kort) => {
+                const valgt = oversiktFilter === kort.id;
+                return (
+                  <button
+                    key={kort.id}
+                    type="button"
+                    onClick={() => velgOversiktFilter(kort.id)}
+                    aria-pressed={valgt}
+                    className={`text-left rounded-2xl border px-4 py-3 transition cursor-pointer ${kort.wrap} ${
+                      valgt ? kort.aktiv : "hover:brightness-[0.98]"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-3xl font-bold tabular-nums leading-none">{kort.tall}</span>
+                      <kort.Icon className={`w-6 h-6 ${kort.icon} shrink-0`} />
+                    </div>
+                    <p className="text-xs font-semibold mt-2 leading-snug">{kort.label}</p>
+                  </button>
+                );
+              })}
+            </div>
+            {oversiktFilter && oversiktFilter !== "medlemmer" && (
+              <p className="text-[11px] text-slate-500">
+                Viser{" "}
+                {oversiktFilter === "bekreftet"
+                  ? "søndager med bekreftede oppgaver"
+                  : oversiktFilter === "venter"
+                    ? "søndager der noen venter på å svare"
+                    : "søndager med ledige plasser"}
+                . Trykk kortet igjen for å vise alle.
+              </p>
+            )}
           </div>
 
-          <div className="space-y-6">
-            {db.gudstjenester.map((gudstjeneste) => {
-              const aktiveRoller = db.roller.filter((r) => r.Aktiv);
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {lederOppfolging.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0">
+                  Følg opp
+                </span>
+                {lederOppfolging.map((leder) => {
+                  const valgt = folgOppLederId === leder.personId;
+                  return (
+                  <span
+                    key={leder.personId}
+                    className={`inline-flex items-center gap-1 rounded-lg pl-1.5 pr-0.5 py-0.5 ${
+                      valgt ? "bg-[#eef5f1] ring-2 ring-[#2d5a3f]/35" : ""
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => vekselFolgOppLeder(leder.personId)}
+                      aria-pressed={valgt}
+                      title={
+                        valgt
+                          ? "Vis alle kommende gudstjenester"
+                          : `Vis søndager der ${leder.navn} har ledige plasser`
+                      }
+                      className="text-sm font-semibold text-slate-900 cursor-pointer hover:text-[#2d5a3f]"
+                    >
+                      {leder.fornavn}
+                      <span className="text-slate-500 font-medium"> ({leder.sondager.size})</span>
+                    </button>
+                    <IkonHandling
+                      label={`Kopier leder-lenke til ${leder.navn}`}
+                      Icon={Share2}
+                      variant="sky"
+                      copied={copiedPersonId === `${leder.personId}-leader`}
+                      onClick={() => handleCopyLink(leder.personId, "leader")}
+                    />
+                  </span>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Alle grupper er dekket på kommende søndager.</p>
+            )}
+          </div>
 
-              // Beregn total bemanningsdekning
-              let totaltBehov = 0;
-              let totaltTildelt = 0;
+          <div className="space-y-2">
+            {visKommendeGudstjenester.map((gudstjeneste) => renderGudstjenesteKort(gudstjeneste))}
+            {visKommendeGudstjenester.length === 0 && (
+              <p className="text-sm text-slate-500 bg-white rounded-2xl border border-slate-200 px-4 py-6 text-center">
+                {folgOppLederId || oversiktFilter
+                  ? "Ingen treff for dette filteret. Trykk kortet eller navnet igjen for å vise alle."
+                  : "Ingen kommende gudstjenester."}
+              </p>
+            )}
+          </div>
 
-              aktiveRoller.forEach((rolle) => {
-                const effBehov = getEffektivtBehov(
-                  gudstjeneste.GudstjenesteID,
-                  rolle,
-                  db.tjenestebehov
-                );
-                totaltBehov += effBehov;
-
-                const tildelinger = db.tildelinger.filter(
-                  (t) =>
-                    t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                    t.RolleID === rolle.RolleID
-                );
-                const aktiveTildelinger = tildelinger.filter((t) => {
-                  const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                  return !svar || svar.Svar !== "Avvist";
-                });
-                totaltTildelt += aktiveTildelinger.length;
-              });
-
-              const erFullBemannet = totaltTildelt >= totaltBehov && totaltBehov > 0;
-
-              // Format dato
-              const parsedDate = new Date(`${gudstjeneste.Dato}T12:00:00`);
-              const datoTekst = !isNaN(parsedDate.getTime())
-                ? parsedDate.toLocaleDateString("nb-NO", {
-                    weekday: "short",
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  })
-                : gudstjeneste.Dato;
-
-              return (
-                <div
-                  key={gudstjeneste.GudstjenesteID}
-                  className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
-                >
-                  {/* Gudstjeneste Header (Mal som på Min side) */}
-                  <div className="bg-slate-50/80 px-4 sm:px-6 py-3.5 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap text-slate-800 text-xs sm:text-sm">
-                        <span className="bg-[#eef5f1] text-[#2d5a3f] text-xs font-mono font-bold px-2 py-0.5 rounded border border-[#d2e8d9]">
-                          {gudstjeneste.GudstjenesteID}
-                        </span>
-                        <span className="font-semibold text-[#2d5a3f]">
-                          {datoTekst}
-                          {gudstjeneste.Tid ? ` · kl. ${gudstjeneste.Tid}` : ""}
-                        </span>
-                        <span className="font-bold text-slate-900">
-                          · {gudstjeneste.Tema || "Gudstjeneste"}
-                        </span>
-                        {gudstjeneste.Sted && (
-                          <span className="text-slate-500">
-                            · {gudstjeneste.Sted}
-                          </span>
-                        )}
-                      </div>
-
-                      {(gudstjeneste.Bibeltekst || gudstjeneste.Kollekt) && (
-                        <div className="flex items-center gap-3 text-xs text-slate-600 flex-wrap">
-                          {gudstjeneste.Bibeltekst && (
-                            <span>
-                              Bibeltekst: <span className="font-medium text-slate-800">{gudstjeneste.Bibeltekst}</span>
-                            </span>
-                          )}
-                          {gudstjeneste.Kollekt && (
-                            <span>
-                              Kollekt: <span className="font-medium text-[#2d5a3f]">{gudstjeneste.Kollekt}</span>
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Bemanningsdekning badge */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                          erFullBemannet
-                            ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                            : "bg-amber-50 text-amber-900 border-amber-200"
-                        }`}
-                      >
-                        {totaltTildelt} / {totaltBehov} tildelt
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Listeform over oppgaver med ekstra admin-kolonne */}
-                  <div className="divide-y divide-slate-100">
-                    {/* Header for tabell på desktop */}
-                    <div className="hidden lg:grid grid-cols-12 gap-3 px-5 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50/50">
-                      <div className="col-span-3">Rolle & Behov</div>
-                      <div className="col-span-4">Tildelte personer (Min side status)</div>
-                      <div className="col-span-5 text-right">Admin-handlinger (Bekreft ja / Forespør / Tildel)</div>
-                    </div>
-
-                    {aktiveRoller.map((rolle) => {
-                      const effektivtBehov = getEffektivtBehov(
-                        gudstjeneste.GudstjenesteID,
-                        rolle,
-                        db.tjenestebehov
-                      );
-
-                      const isOverridden = db.tjenestebehov.some(
-                        (tb) =>
-                          tb.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                          tb.RolleID === rolle.RolleID &&
-                          tb.Aktiv
-                      );
-
-                      const tildelinger = db.tildelinger.filter(
-                        (t) =>
-                          t.GudstjenesteID === gudstjeneste.GudstjenesteID &&
-                          t.RolleID === rolle.RolleID
-                      );
-
-                      const aktiveTildelinger = tildelinger.filter((t) => {
-                        const svar = db.svar.find((s) => s.TildelingID === t.TildelingID);
-                        return !svar || svar.Svar !== "Avvist";
-                      });
-
-                      const antallTildelt = aktiveTildelinger.length;
-                      const erFull = antallTildelt >= effektivtBehov;
-
-                      return (
-                        <div
-                          key={rolle.RolleID}
-                          className="px-4 sm:px-5 py-3 hover:bg-slate-50/70 transition flex flex-col lg:grid lg:grid-cols-12 gap-3 lg:items-center"
-                        >
-                          {/* 1. Rolle & Behov */}
-                          <div className="lg:col-span-3 flex items-center gap-3">
-                            <RolleIkon rollenavn={rolle.Rollenavn} />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
-                                  {rolle.Rollenavn}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditNeedModal({
-                                      gudstjenesteId: gudstjeneste.GudstjenesteID,
-                                      rolleId: rolle.RolleID,
-                                      currentBehov: effektivtBehov,
-                                      rolleNavn: rolle.Rollenavn,
-                                    });
-                                    setCustomNeedInput(effektivtBehov);
-                                  }}
-                                  title="Overstyr/juster antall som trengs"
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition ${
-                                    erFull
-                                      ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                                      : "bg-amber-100 text-amber-900 hover:bg-amber-200"
-                                  }`}
-                                >
-                                  <span>
-                                    {antallTildelt} / {effektivtBehov}
-                                  </span>
-                                  <Sliders className="w-2.5 h-2.5 opacity-60" />
-                                </button>
-                              </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedRolleForModal(rolle)}
-                                  className="text-[10px] text-slate-400 hover:text-slate-700 underline cursor-pointer"
-                                >
-                                  Instruks
-                                </button>
-                                {isOverridden && (
-                                  <span className="text-[9px] text-[#2d5a3f] bg-[#eef5f1] border border-[#d2e8d9] px-1 rounded">
-                                    Std: {rolle.Behov}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 2. Tildelte personer (Mal fra Min side) */}
-                          <div className="lg:col-span-4 flex flex-wrap items-center gap-1.5">
-                            {tildelinger.length === 0 ? (
-                              <span className="text-xs text-slate-400 italic">
-                                Ingen tildelt
-                              </span>
-                            ) : (
-                              tildelinger.map((t) => {
-                                const p = db.personer.find(
-                                  (pers) => pers.PersonID === t.PersonID
-                                );
-                                const svar = db.svar.find(
-                                  (s) => s.TildelingID === t.TildelingID
-                                );
-                                const status = svar?.Svar || "Venter";
-                                const isBekreftet = status === "Bekreftet";
-                                const isAvvist = status === "Avvist";
-                                const isVenter = status === "Venter";
-
-                                return (
-                                  <div
-                                    key={t.TildelingID}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs border transition ${
-                                      isBekreftet
-                                        ? "bg-emerald-50/80 border-emerald-200 text-emerald-950 font-medium"
-                                        : isAvvist
-                                        ? "bg-rose-50/80 border-rose-200 text-rose-800 line-through opacity-75"
-                                        : "bg-amber-50/80 border-amber-200 text-amber-950 font-medium"
-                                    }`}
-                                  >
-                                    <span
-                                      className={`w-2 h-2 rounded-full shrink-0 ${
-                                        isBekreftet
-                                          ? "bg-emerald-500 ring-2 ring-emerald-200"
-                                          : isAvvist
-                                          ? "bg-rose-500 ring-2 ring-rose-200"
-                                          : "bg-amber-400 ring-2 ring-amber-200"
-                                      }`}
-                                      title={
-                                        isBekreftet
-                                          ? "Bekreftet"
-                                          : isAvvist
-                                          ? "Meldt forfall / Kan ikke"
-                                          : "Forespurt (venter svar)"
-                                      }
-                                    />
-                                    <span>{p?.Navn || t.PersonID}</span>
-                                    <span className="text-[10px] text-slate-400 font-normal">
-                                      {isBekreftet
-                                        ? "(Ja)"
-                                        : isAvvist
-                                        ? "(Nei)"
-                                        : "(Venter)"}
-                                    </span>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
-
-                          {/* 3. Ekstra kolonne for Admin-funksjonaliteter */}
-                          <div className="lg:col-span-5 flex flex-wrap items-center lg:justify-end gap-1.5 pt-1 lg:pt-0 border-t lg:border-t-0 border-slate-100">
-                            {/* Handlinger per tildelt person */}
-                            {tildelinger.map((t) => {
-                              const p = db.personer.find(
-                                (pers) => pers.PersonID === t.PersonID
-                              );
-                              const svar = db.svar.find(
-                                (s) => s.TildelingID === t.TildelingID
-                              );
-                              const status = svar?.Svar || "Venter";
-                              const personKortnavn =
-                                p?.Fornavn || p?.Navn?.split(" ")[0] || t.PersonID;
-
-                              return (
-                                <div
-                                  key={`admin-action-${t.TildelingID}`}
-                                  className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs text-[11px]"
-                                >
-                                  <span
-                                    className="font-semibold text-slate-700 max-w-[80px] truncate px-1"
-                                    title={p?.Navn || t.PersonID}
-                                  >
-                                    {personKortnavn}:
-                                  </span>
-
-                                  {/* Bekreft ja */}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleUpdatePersonStatus(
-                                        t.TildelingID,
-                                        t.PersonID,
-                                        "Bekreftet"
-                                      )
-                                    }
-                                    title="Bekreft (personen har sagt ja)"
-                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
-                                      status === "Bekreftet"
-                                        ? "bg-emerald-600 text-white shadow-2xs"
-                                        : "bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-800"
-                                    }`}
-                                  >
-                                    <Check className="w-3 h-3" />
-                                    <span>Bekreft</span>
-                                  </button>
-
-                                  {/* Forespurt / Venter */}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleUpdatePersonStatus(
-                                        t.TildelingID,
-                                        t.PersonID,
-                                        "Venter"
-                                      )
-                                    }
-                                    title="Sett status til forespurt / venter svar"
-                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
-                                      status === "Venter"
-                                        ? "bg-amber-500 text-white shadow-2xs"
-                                        : "bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-800"
-                                    }`}
-                                  >
-                                    <Clock className="w-3 h-3" />
-                                    <span>Forespør</span>
-                                  </button>
-
-                                  {/* Forfall / Kan ikke */}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleUpdatePersonStatus(
-                                        t.TildelingID,
-                                        t.PersonID,
-                                        "Avvist"
-                                      )
-                                    }
-                                    title="Marker som forfall / kan ikke"
-                                    className={`px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5 cursor-pointer transition ${
-                                      status === "Avvist"
-                                        ? "bg-rose-600 text-white shadow-2xs"
-                                        : "bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-800"
-                                    }`}
-                                  >
-                                    <X className="w-3 h-3" />
-                                    <span>Forfall</span>
-                                  </button>
-
-                                  {/* Fjern tildeling */}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveTildeling(t.TildelingID)}
-                                    title="Fjern tildeling"
-                                    className="p-1 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50 cursor-pointer ml-0.5"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-
-                            {/* Knapp for å tildele ny person */}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAssignModal({
-                                  gudstjenesteId: gudstjeneste.GudstjenesteID,
-                                  rolleId: rolle.RolleID,
-                                  rolleNavn: rolle.Rollenavn,
-                                })
-                              }
-                              className="px-2.5 py-1 bg-[#eef5f1] hover:bg-[#dff0e6] text-[#2d5a3f] border border-[#d2e8d9] rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition shadow-2xs shrink-0"
-                            >
-                              <UserPlus className="w-3.5 h-3.5" />
-                              <span>+ Tildel</span>
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+          {visTidligereFiltrert.length > 0 && oversiktFilter !== "medlemmer" && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setVisTidligere((v) => !v)}
+                aria-expanded={visTidligere}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+              >
+                {visTidligere ? "Skjul tidligere" : `Tidligere (${visTidligereFiltrert.length})`}
+              </button>
+              {visTidligere && (
+                <div className="space-y-2 mt-2">
+                  {visTidligereFiltrert.map((gudstjeneste) => renderGudstjenesteKort(gudstjeneste))}
                 </div>
-              );
-            })}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       )}
-
       {/* FANE 2: PERSONREGISTER */}
       {activeTab === "people" && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">
-                Personregister ({filteredPersoner.length})
-              </h3>
-              <p className="text-xs text-slate-500">
-                Administrer personer, tildelte personroller og generer personlige lenker.
-              </p>
-            </div>
+            <h3 className="text-lg font-bold text-slate-900">
+              {filteredPersoner.length} personer
+            </h3>
 
             <button
               onClick={() => openNewPersonModal()}
@@ -955,7 +1335,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               <input
                 type="text"
-                placeholder="Søk på navn, e-post eller ID (e.g. P001)..."
+                placeholder="Søk på navn eller e-post..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full text-xs pl-9 pr-3 py-2 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
@@ -998,7 +1378,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                 <tr>
-                  <th className="p-3">ID</th>
                   <th className="p-3">Navn</th>
                   <th className="p-3">Kontaktinfo</th>
                   <th className="p-3">Tilgang & Lederansvar</th>
@@ -1026,9 +1405,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
                   return (
                     <tr key={person.PersonID} className="hover:bg-slate-50/70 transition">
-                      <td className="p-3 font-mono font-bold text-[#2d5a3f]">
-                        {person.PersonID}
-                      </td>
                       <td className="p-3">
                         <div className="font-bold text-slate-900">{person.Navn}</div>
                         {person.Notat && (
@@ -1050,8 +1426,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             </span>
                           )}
                           {personTilgang.isLeader && (
-                            <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-sky-200">
-                              <Star className="w-3 h-3 fill-sky-500 text-sky-500" />
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-amber-200">
+                              <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
                               Tjenestegruppeleder
                               {lederGrupper.length > 0 && ` (${lederGrupper.map((g) => g.gruppe.Gruppenavn).join(", ")})`}
                             </span>
@@ -1089,53 +1465,22 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         </div>
                       </td>
                       <td className="p-3 text-right">
-                        <div className="inline-flex flex-col sm:flex-row items-end sm:items-center justify-end gap-1.5">
+                        <div className="inline-flex items-center justify-end gap-1">
                           {personTilgang.isLeader && (
-                            <button
-                              type="button"
+                            <IkonHandling
+                              label="Kopier leder-lenke"
+                              Icon={Share2}
+                              variant="sky"
+                              copied={isCopiedLeader}
                               onClick={() => handleCopyLink(person.PersonID, "leader")}
-                              className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
-                                isCopiedLeader
-                                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                  : "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800"
-                              }`}
-                              title="Kopier lenke som åpner Tjenestegruppeleder-fanen direkte for denne lederen"
-                            >
-                              {isCopiedLeader ? (
-                                <>
-                                  <Check className="w-3 h-3 text-emerald-600" />
-                                  <span>Lederlenke kopiert!</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Star className="w-3 h-3 fill-sky-500 text-sky-500" />
-                                  <span>Kopier leder-lenke</span>
-                                </>
-                              )}
-                            </button>
+                            />
                           )}
-                          <button
-                            type="button"
+                          <IkonHandling
+                            label="Kopier Min side-lenke"
+                            Icon={Share2}
+                            copied={isCopiedGeneral || isCopiedPersonal}
                             onClick={() => handleCopyLink(person.PersonID)}
-                            className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
-                              isCopiedGeneral || isCopiedPersonal
-                                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                : "bg-slate-50 hover:bg-[#eef5f1] border-slate-200 text-slate-700 hover:text-[#2d5a3f]"
-                            }`}
-                            title="Kopier standard personlig lenke"
-                          >
-                            {isCopiedGeneral || isCopiedPersonal ? (
-                              <>
-                                <Check className="w-3 h-3 text-emerald-600" />
-                                <span>Kopiert!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Share2 className="w-3 h-3" />
-                                <span>Kopier Min side</span>
-                              </>
-                            )}
-                          </button>
+                          />
                         </div>
                       </td>
                     </tr>
@@ -1150,41 +1495,193 @@ export const AdminView: React.FC<AdminViewProps> = ({
       {/* FANE 3: GRUPPER */}
       {activeTab === "groups" && (
         <div className="space-y-6">
-          {/* Tjenestegruppeledere Oversiktskort */}
+          {/* Tjenestegrupper */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-              <div>
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="min-w-0">
                 <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Star className="w-4 h-4 fill-sky-500 text-sky-500" />
-                  <span>Oversikt over Tjenestegruppeledere & Direktelenker</span>
+                  <UsersRound className="w-4 h-4 text-[#2d5a3f]" />
+                  <span>Tjenestegrupper</span>
                 </h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Her har du full oversikt over hvem som leder hver gruppe. Kopier leder-lenken og send til vedkommende så de får full tilgang til både Min side og Tjenestegruppeleder-fanen.
+                  Klikk på en gruppe for detaljer. Del leder-lenken med ikonet.
                 </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-slate-400 shrink-0" />
+                  <select
+                    value={groupTypeFilter}
+                    onChange={(e) => setGroupTypeFilter(e.target.value)}
+                    className="text-xs border border-slate-200 rounded-full px-3 py-2 bg-white focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] min-w-[180px]"
+                  >
+                    {GRUPPEFILTER.filter((f) => !f.seksjon).map((f) => {
+                      const n = antallGrupperForFilter(db, f.id);
+                      return (
+                        <option key={f.id} value={f.id} disabled={n === 0}>
+                          {f.label}
+                          {n === 0 ? " (ingen ennå)" : ` (${n})`}
+                        </option>
+                      );
+                    })}
+                    <optgroup label="Ledelse">
+                      {GRUPPEFILTER.filter((f) => f.seksjon === "Ledelse").map((f) => {
+                        const n = antallGrupperForFilter(db, f.id);
+                        return (
+                          <option key={f.id} value={f.id} disabled={n === 0}>
+                            {f.label}
+                            {n === 0 ? " (ingen ennå)" : ` (${n})`}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
+                </div>
+                <div className="flex items-center p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setGroupOverviewView("grid")}
+                    className={`p-1.5 rounded-lg cursor-pointer ${
+                      groupOverviewView === "grid"
+                        ? "bg-white text-[#2d5a3f] shadow-xs"
+                        : "text-slate-400 hover:text-slate-600"
+                    }`}
+                    title="Rutenett"
+                    aria-label="Rutenett"
+                    aria-pressed={groupOverviewView === "grid"}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGroupOverviewView("list")}
+                    className={`p-1.5 rounded-lg cursor-pointer ${
+                      groupOverviewView === "list"
+                        ? "bg-white text-[#2d5a3f] shadow-xs"
+                        : "text-slate-400 hover:text-slate-600"
+                    }`}
+                    title="Liste"
+                    aria-label="Liste"
+                    aria-pressed={groupOverviewView === "list"}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNewGroupModal(true)}
+                  className="px-3.5 py-2 bg-[#2d5a3f] hover:bg-[#234731] text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Ny gruppe</span>
+                </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div
+              className={
+                groupOverviewView === "grid"
+                  ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
+                  : "flex flex-col gap-2"
+              }
+            >
               {db.grupper
-                .filter((g) => g.Aktiv)
+                .filter((g) => {
+                  if (!g.Aktiv) return false;
+                  const ids = gruppetypeIderForFilter(db, groupTypeFilter);
+                  if (ids.length === 0 && groupTypeFilter === "tjenestegruppe") return true;
+                  return ids.includes(g.GruppetypeID);
+                })
                 .map((gruppe) => {
                   const leder = db.personer.find((p) => p.PersonID === gruppe.GruppelederID);
                   const nestleder = db.personer.find((p) => p.PersonID === gruppe.NestlederID);
+                  const medlemstall = antallMedlemmerIGruppe(db, gruppe);
+                  const ikonNavn = ikonNavnForGruppe(db, gruppe);
                   const isCopiedLeder = leder && copiedPersonId === `${leder.PersonID}-leader`;
                   const isCopiedNestleder = nestleder && copiedPersonId === `${nestleder.PersonID}-leader`;
+
+                  if (groupOverviewView === "list") {
+                    return (
+                      <div
+                        key={gruppe.GruppeID}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setDetailGruppeId(gruppe.GruppeID)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setDetailGruppeId(gruppe.GruppeID);
+                          }
+                        }}
+                        className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-slate-50/70 border border-slate-200 rounded-xl px-3.5 py-2.5 hover:border-[#2d5a3f]/40 cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2 min-w-[140px] flex-1">
+                          <RolleIkon rollenavn={ikonNavn} />
+                          <span className="font-bold text-slate-900 text-sm">
+                            {gruppe.Gruppenavn}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-700 min-w-[140px]">
+                          <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500 shrink-0" />
+                          <span className="truncate">{leder ? leder.Navn : "Ingen leder"}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-700 min-w-[140px]">
+                          <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
+                          <span className="truncate">{nestleder ? nestleder.Navn : "—"}</span>
+                        </div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 border-l border-slate-200 pl-2.5 shrink-0">
+                          {medlemstall} MEDL.
+                        </span>
+                        {leder && (
+                          <div className="flex items-center gap-1 ml-auto">
+                          <IkonHandling
+                            label="Kopier leder-lenke"
+                            Icon={Share2}
+                            variant="sky"
+                            copied={Boolean(isCopiedLeder)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyLink(leder.PersonID, "leader");
+                            }}
+                          />
+                          <IkonHandling
+                            label="Se som denne lederen"
+                            Icon={Eye}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectPerson(leder.PersonID, "leader");
+                            }}
+                          />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
 
                   return (
                     <div
                       key={gruppe.GruppeID}
-                      className="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between space-y-3"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDetailGruppeId(gruppe.GruppeID)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setDetailGruppeId(gruppe.GruppeID);
+                        }
+                      }}
+                      className="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-[#2d5a3f]/40 cursor-pointer text-left"
                     >
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-slate-900 text-sm">
-                            {gruppe.Gruppenavn}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                            {gruppe.GruppeID}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <RolleIkon rollenavn={ikonNavn} />
+                            <span className="font-bold text-slate-900 text-sm truncate">
+                              {gruppe.Gruppenavn}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 shrink-0">
+                            {medlemstall} MEDL.
                           </span>
                         </div>
 
@@ -1192,50 +1689,38 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         <div className="bg-white p-2.5 rounded-lg border border-slate-200/90 space-y-1.5">
                           <div className="flex items-center justify-between gap-1">
                             <div className="flex items-center gap-1.5 font-semibold text-slate-900 text-xs">
-                              <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
+                              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500 shrink-0" />
                               <span>{leder ? leder.Navn : "Ingen leder tildelt"}</span>
                             </div>
-                            <span className="text-[10px] bg-sky-50 text-sky-700 font-medium px-1.5 py-0.5 rounded border border-sky-200">
+                            <span className="text-[10px] bg-amber-50 text-amber-800 font-medium px-1.5 py-0.5 rounded border border-amber-200">
                               Leder
                             </span>
                           </div>
                           {leder && (
-                            <div className="text-[11px] text-slate-500 truncate">
-                              {leder.Epost} {leder.Telefon ? `· ${leder.Telefon}` : ""}
-                            </div>
-                          )}
-                          {leder && (
-                            <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
-                              <button
-                                type="button"
-                                onClick={() => handleCopyLink(leder.PersonID, "leader")}
-                                className={`flex-1 px-2 py-1 text-[11px] font-semibold rounded-md border transition inline-flex items-center justify-center gap-1 cursor-pointer ${
-                                  isCopiedLeder
-                                    ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                    : "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-800"
-                                }`}
-                                title="Kopier direktelenke til lederfanen"
-                              >
-                                {isCopiedLeder ? (
-                                  <>
-                                    <Check className="w-3 h-3 text-emerald-600" />
-                                    <span>Lederlenke kopiert!</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Share2 className="w-3 h-3" />
-                                    <span>Kopier leder-lenke</span>
-                                  </>
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onSelectPerson(leder.PersonID)}
-                                className="px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md border border-slate-200 cursor-pointer"
-                                title="Se appen som denne lederen"
-                              >
-                                Se som
-                              </button>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-[11px] text-slate-500 truncate min-w-0">
+                                {leder.Epost} {leder.Telefon ? `· ${leder.Telefon}` : ""}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <IkonHandling
+                                  label="Kopier leder-lenke"
+                                  Icon={Share2}
+                                  variant="sky"
+                                  copied={Boolean(isCopiedLeder)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyLink(leder.PersonID, "leader");
+                                  }}
+                                />
+                                <IkonHandling
+                                  label="Se som denne lederen"
+                                  Icon={Eye}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelectPerson(leder.PersonID, "leader");
+                                  }}
+                                />
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1245,47 +1730,36 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           <div className="bg-white p-2.5 rounded-lg border border-slate-200/90 space-y-1.5">
                             <div className="flex items-center justify-between gap-1">
                               <div className="flex items-center gap-1.5 font-semibold text-slate-900 text-xs">
-                                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
+                                <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
                                 <span>{nestleder.Navn}</span>
                               </div>
-                              <span className="text-[10px] bg-amber-50 text-amber-700 font-medium px-1.5 py-0.5 rounded border border-amber-200">
+                              <span className="text-[10px] bg-sky-50 text-sky-700 font-medium px-1.5 py-0.5 rounded border border-sky-200">
                                 Nestleder
                               </span>
                             </div>
-                            <div className="text-[11px] text-slate-500 truncate">
-                              {nestleder.Epost} {nestleder.Telefon ? `· ${nestleder.Telefon}` : ""}
-                            </div>
-                            <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
-                              <button
-                                type="button"
-                                onClick={() => handleCopyLink(nestleder.PersonID, "leader")}
-                                className={`flex-1 px-2 py-1 text-[11px] font-semibold rounded-md border transition inline-flex items-center justify-center gap-1 cursor-pointer ${
-                                  isCopiedNestleder
-                                    ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                    : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
-                                }`}
-                                title="Kopier direktelenke for nestleder"
-                              >
-                                {isCopiedNestleder ? (
-                                  <>
-                                    <Check className="w-3 h-3 text-emerald-600" />
-                                    <span>Lederlenke kopiert!</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Share2 className="w-3 h-3" />
-                                    <span>Kopier leder-lenke</span>
-                                  </>
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onSelectPerson(nestleder.PersonID)}
-                                className="px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md border border-slate-200 cursor-pointer"
-                                title="Se appen som denne nestlederen"
-                              >
-                                Se som
-                              </button>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-[11px] text-slate-500 truncate min-w-0">
+                                {nestleder.Epost} {nestleder.Telefon ? `· ${nestleder.Telefon}` : ""}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <IkonHandling
+                                  label="Kopier leder-lenke"
+                                  Icon={Share2}
+                                  copied={Boolean(isCopiedNestleder)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyLink(nestleder.PersonID, "leader");
+                                  }}
+                                />
+                                <IkonHandling
+                                  label="Se som denne nestlederen"
+                                  Icon={Eye}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelectPerson(nestleder.PersonID, "leader");
+                                  }}
+                                />
+                              </div>
                             </div>
                           </div>
                         )}
@@ -1296,165 +1770,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
           </div>
 
-          {/* Gruppeliste */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Users className="w-5 h-5 text-[#2d5a3f]" />
-              <span>Gruppedetaljer & Medlemmer</span>
-            </h3>
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-400 shrink-0" />
-              <select
-                value={groupTypeFilter}
-                onChange={(e) => setGroupTypeFilter(e.target.value)}
-                className="text-xs border border-slate-200 rounded-xl p-2 bg-white focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f] min-w-[220px]"
-              >
-                {GRUPPEFILTER.filter((f) => !f.seksjon).map((f) => {
-                  const n = antallGrupperForFilter(db, f.id);
-                  return (
-                    <option key={f.id} value={f.id} disabled={n === 0}>
-                      {f.label}
-                      {n === 0 ? " (ingen ennå)" : ` (${n})`}
-                    </option>
-                  );
-                })}
-                <optgroup label="Ledelse">
-                  {GRUPPEFILTER.filter((f) => f.seksjon === "Ledelse").map((f) => {
-                    const n = antallGrupperForFilter(db, f.id);
-                    return (
-                      <option key={f.id} value={f.id} disabled={n === 0}>
-                        {f.label}
-                        {n === 0 ? " (ingen ennå)" : ` (${n})`}
-                      </option>
-                    );
-                  })}
-                </optgroup>
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-3 max-w-3xl">
-            {db.grupper
-              .filter((gruppe) => {
-                const ids = gruppetypeIderForFilter(db, groupTypeFilter);
-                if (ids.length === 0 && groupTypeFilter === "tjenestegruppe") return true;
-                return ids.includes(gruppe.GruppetypeID);
-              })
-              .map((gruppe) => {
-                const medlemIds = new Set(
-                  db.gruppemedlemmer
-                    .filter((gm) => gm.GruppeID === gruppe.GruppeID && gm.Aktiv)
-                    .map((gm) => gm.PersonID)
-                );
-                if (gruppe.GruppelederID) medlemIds.add(gruppe.GruppelederID);
-                if (gruppe.NestlederID) medlemIds.add(gruppe.NestlederID);
-                const medlemsnavn = Array.from(medlemIds)
-                  .map((id) => db.personer.find((p) => p.PersonID === id))
-                  .filter((p): p is NonNullable<typeof p> => Boolean(p))
-                  .sort((a, b) => a.Navn.localeCompare(b.Navn, "nb"));
-                const leder = db.personer.find((p) => p.PersonID === gruppe.GruppelederID);
-                const nestleder = db.personer.find((p) => p.PersonID === gruppe.NestlederID);
-                const typeNavn = db.gruppetyper.find(
-                  (gt) => gt.GruppetypeID === gruppe.GruppetypeID
-                )?.Navn;
-                const apen = expandedGroupId === gruppe.GruppeID;
-
-                return (
-                  <div
-                    key={gruppe.GruppeID}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() =>
-                      setExpandedGroupId(apen ? null : gruppe.GruppeID)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setExpandedGroupId(apen ? null : gruppe.GruppeID);
-                      }
-                    }}
-                    className="w-full text-left bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3 hover:border-[#2d5a3f]/40 cursor-pointer"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-sm">
-                          {gruppe.Gruppenavn}
-                        </h4>
-                        {typeNavn && (
-                          <div className="text-[11px] text-slate-400">{typeNavn}</div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingGruppeId(gruppe.GruppeID);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-[#2d5a3f] bg-[#eef5f1] hover:bg-[#d2e8d9] px-2.5 py-1 rounded-lg cursor-pointer border border-[#d2e8d9]"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                          Rediger
-                        </button>
-                        <ChevronDown
-                          className={`w-4 h-4 text-slate-400 transition ${apen ? "rotate-180" : ""}`}
-                        />
-                      </div>
-                    </div>
-
-                    {gruppe.Beskrivelse && (
-                      <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-                        {gruppe.Beskrivelse}
-                      </p>
-                    )}
-
-                    <div className="text-xs space-y-1">
-                      <div className="flex items-center gap-1.5 text-slate-700">
-                        <Star className="w-3.5 h-3.5 fill-sky-500 text-sky-500 shrink-0" />
-                        <span className="font-medium">{leder?.Navn || "Ikke satt"}</span>
-                        <span className="text-slate-400">Gruppeleder</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-slate-700">
-                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
-                        <span className="font-medium">{nestleder?.Navn || "Ikke satt"}</span>
-                        <span className="text-slate-400">Nestleder</span>
-                      </div>
-                    </div>
-                    <div className="text-xs text-slate-400">
-                      {medlemsnavn.length} medlemmer
-                    </div>
-
-                    {apen && (
-                      <ul className="pt-2 border-t border-slate-100 space-y-1">
-                        {medlemsnavn.length === 0 && (
-                          <li className="text-xs text-slate-400">Ingen medlemmer.</li>
-                        )}
-                        {medlemsnavn.map((p) => (
-                          <li key={p.PersonID} className="text-sm text-slate-700 flex items-center gap-1.5">
-                            {gruppe.GruppelederID === p.PersonID && (
-                              <Star className="w-3 h-3 fill-sky-500 text-sky-500 shrink-0" />
-                            )}
-                            {gruppe.NestlederID === p.PersonID && (
-                              <Star className="w-3 h-3 fill-amber-400 text-amber-400 shrink-0" />
-                            )}
-                            <span>{p.Navn}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            {db.grupper.filter((gruppe) => {
-              const ids = gruppetypeIderForFilter(db, groupTypeFilter);
-              if (ids.length === 0 && groupTypeFilter === "tjenestegruppe") return true;
-              return ids.includes(gruppe.GruppetypeID);
-            }).length === 0 && (
-              <p className="text-sm text-slate-500 bg-white border border-dashed border-slate-200 rounded-2xl p-6 text-center">
-                Ingen grupper i denne kategorien ennå.
-              </p>
-            )}
-          </div>
         </div>
       )}
 
@@ -1463,67 +1778,39 @@ export const AdminView: React.FC<AdminViewProps> = ({
         <div className="space-y-4 max-w-2xl">
           <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
             <Layers className="w-5 h-5 text-[#2d5a3f]" />
-            <span>Roller & Standardbehov ({db.roller.length})</span>
+            <span>Roller ({db.roller.length})</span>
           </h3>
-          <p className="text-xs text-slate-500">
-            Tjenestegruppe på hver rolle styrer hva gruppelederen ser. Endringen lagres i arket (fanen Roller, kolonnen GruppeID).
-          </p>
 
           <div className="space-y-3">
             {db.roller.map((rolle) => {
-              const antallKvalifiserte = db.personroller.filter(
-                (pr) => pr.RolleID === rolle.RolleID && pr.Aktiv
-              ).length;
+              const instruks =
+                db.rollebeskrivelser.find((rb) => rb.RolleID === rolle.RolleID)
+                  ?.Rollebeskrivelse || rolle.Beskrivelse;
+              const sammendrag = oppsummerInstruks(instruks);
 
               return (
                 <div
                   key={rolle.RolleID}
-                  className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-2"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedRolleForModal(rolle)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedRolleForModal(rolle);
+                    }
+                  }}
+                  className="w-full text-left bg-white p-4 rounded-2xl border border-slate-200 shadow-xs hover:border-[#2d5a3f]/40 cursor-pointer"
                 >
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-bold text-slate-900 text-sm">
-                      {rolle.Rollenavn}
-                    </h4>
-                    <span className="text-xs font-mono bg-[#eef5f1] text-[#2d5a3f] px-2 py-0.5 rounded font-bold border border-[#d2e8d9]">
-                      {rolle.RolleID}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500">{rolle.Beskrivelse}</p>
-
-                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label className="font-medium text-slate-600">Tjenestegruppe</label>
-                      <select
-                        value={rolle.GruppeID || ""}
-                        onChange={(e) => handleSettRolleGruppe(rolle.RolleID, e.target.value)}
-                        className="border border-slate-200 rounded-xl p-1.5 bg-slate-50 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-[#2d5a3f]"
-                      >
-                        <option value="">Ingen</option>
-                        {db.grupper
-                          .filter((g) => g.Aktiv)
-                          .slice()
-                          .sort((a, b) => a.Gruppenavn.localeCompare(b.Gruppenavn, "nb"))
-                          .map((g) => (
-                            <option key={g.GruppeID} value={g.GruppeID}>
-                              {g.Gruppenavn}
-                            </option>
-                          ))}
-                      </select>
-                      {antallKvalifiserte > 0 && (
-                        <span className="text-slate-400"> · {antallKvalifiserte} med personrolle</span>
+                  <div className="flex items-start gap-3">
+                    <RolleIkon rollenavn={rolle.Rollenavn} className="w-10 h-10" />
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-slate-900 text-sm">{rolle.Rollenavn}</h4>
+                      {sammendrag ? (
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">{sammendrag}</p>
+                      ) : (
+                        <p className="text-xs text-slate-400 mt-1">Ingen instruks registrert</p>
                       )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-slate-500">
-                        Std. behov: <strong>{rolle.Behov}</strong>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedRolleForModal(rolle)}
-                        className="text-[#2d5a3f] hover:underline font-medium cursor-pointer"
-                      >
-                        Se instruks
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1535,7 +1822,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       {/* FANE 5: GOOGLE SHEETS & SYNKKONTROLL */}
       {activeTab === "sync" && (
-        <GoogleSheetsSync db={db} onUpdateDb={onUpdateDb} />
+        <GoogleSheetsSync
+          db={db}
+          onUpdateDb={onUpdateDb}
+          dataSource={dataSource}
+          onSwitchDataSource={onSwitchDataSource}
+          onOpenImport={() => setShowImportModal(true)}
+        />
       )}
 
       {/* MODAL: Ny Gudstjeneste */}
@@ -1672,7 +1965,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   <div className="font-semibold mb-1">Tjeneste som tildeles</div>
                   {newPersonSlots.map((s) => (
                     <div key={`${s.gudstjenesteId}-${s.rolleId}`}>
-                      {s.rolleNavn} · {s.gudstjenesteId}
+                      {s.rolleNavn}
                       {s.dato ? ` · ${s.dato}` : ""}
                     </div>
                   ))}
@@ -1748,7 +2041,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
               Juster rollebehov
             </h3>
             <p className="text-xs text-slate-500 mb-4">
-              Rolle: {editNeedModal.rolleNavn} for gudstjeneste {editNeedModal.gudstjenesteId}
+              Rolle: {editNeedModal.rolleNavn}
+              {db.gudstjenester.find((g) => g.GudstjenesteID === editNeedModal.gudstjenesteId)
+                ?.Dato
+                ? ` · ${db.gudstjenester.find((g) => g.GudstjenesteID === editNeedModal.gudstjenesteId)?.Dato}`
+                : ""}
             </p>
 
             <div className="space-y-3 mb-6">
@@ -1793,7 +2090,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
               Tildel person til {assignModal.rolleNavn}
             </h3>
             <p className="text-xs text-slate-500 mb-4">
-              Gudstjeneste: {assignModal.gudstjenesteId}
+              Gudstjeneste:{" "}
+              {db.gudstjenester.find((g) => g.GudstjenesteID === assignModal.gudstjenesteId)
+                ?.Dato || ""}
             </p>
 
             <div className="space-y-3 mb-6">
@@ -1818,7 +2117,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     )
                     .map((p) => (
                       <option key={p.PersonID} value={p.PersonID}>
-                        {p.Navn} ({p.PersonID})
+                        {p.Navn}
                       </option>
                     ))}
                 </optgroup>
@@ -1835,7 +2134,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     )
                     .map((p) => (
                       <option key={p.PersonID} value={p.PersonID}>
-                        {p.Navn} ({p.PersonID})
+                        {p.Navn}
                       </option>
                     ))}
                 </optgroup>
@@ -1889,6 +2188,27 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       )}
 
+      {newGroupModal && (
+        <NewGroupModal
+          db={db}
+          onUpdateDb={onUpdateDb}
+          onClose={() => setNewGroupModal(false)}
+        />
+      )}
+
+      {detailGruppeId &&
+        db.grupper.find((g) => g.GruppeID === detailGruppeId) && (
+        <GroupDetailModal
+          gruppe={db.grupper.find((g) => g.GruppeID === detailGruppeId)!}
+          db={db}
+          onClose={() => setDetailGruppeId(null)}
+          onEdit={() => {
+            setEditingGruppeId(detailGruppeId);
+            setDetailGruppeId(null);
+          }}
+        />
+      )}
+
       {editingGruppeId && (
         <GroupAdminModal
           key={editingGruppeId}
@@ -1900,22 +2220,38 @@ export const AdminView: React.FC<AdminViewProps> = ({
       )}
 
       {/* MODAL: Rollebeskrivelse */}
-      {selectedRolleForModal && (
-        <RoleDescriptionModal
-          rolle={selectedRolleForModal}
-          rollebeskrivelse={
-            db.rollebeskrivelser.find(
-              (rb) => rb.RolleID === selectedRolleForModal.RolleID
-            ) || null
-          }
-          gruppe={
-            selectedRolleForModal.GruppeID
-              ? db.grupper.find((g) => g.GruppeID === selectedRolleForModal.GruppeID) || null
-              : null
-          }
-          onClose={() => setSelectedRolleForModal(null)}
-        />
-      )}
+      {selectedRolleForModal && (() => {
+        const liveRolle = db.roller.find(
+          (r) => r.RolleID === selectedRolleForModal.RolleID
+        );
+        if (!liveRolle) return null;
+        return (
+          <RoleDescriptionModal
+            rolle={liveRolle}
+            rollebeskrivelse={
+              db.rollebeskrivelser.find((rb) => rb.RolleID === liveRolle.RolleID) ||
+              null
+            }
+            gruppe={
+              liveRolle.GruppeID
+                ? db.grupper.find((g) => g.GruppeID === liveRolle.GruppeID) || null
+                : null
+            }
+            grupper={db.grupper}
+            antallKvalifiserte={
+              db.personroller.filter(
+                (pr) => pr.RolleID === liveRolle.RolleID && pr.Aktiv
+              ).length
+            }
+            editable
+            onUpdateRolle={(patch) => handleOppdaterRolle(liveRolle.RolleID, patch)}
+            onSaveInstruks={(tekst) =>
+              handleLagreRolleinstruks(liveRolle.RolleID, tekst)
+            }
+            onClose={() => setSelectedRolleForModal(null)}
+          />
+        );
+      })()}
 
       {/* MODAL: Kildedata & Migrering */}
       {showImportModal && (

@@ -34,7 +34,7 @@ const STEG: Steg[] = [
   {
     target: "sett-opp",
     tittel: "Fyll hullene selv",
-    tekst: "Mangler det folk, vises Sett opp. Velg et gruppemedlem. Lenken kopieres, så du kan sende den med en gang. Har dere avtalt på telefon, kan du bekrefte i planen.",
+    tekst: "Sett opp vises på hver rolle. Velg et gruppemedlem — også når veiledende antall er dekket. Flere enn behovet er helt greit. Lenken kopieres, så du kan sende den med en gang. Har dere avtalt på telefon, kan du bekrefte i planen.",
     Icon: UserPlus,
   },
   {

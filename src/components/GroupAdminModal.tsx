@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Search, Star, Trash2, X } from "lucide-react";
+import { IkonHandling } from "./IkonHandling";
 import { Gruppemedlem, Person } from "../types/database";
 import {
   DatabaseState,
@@ -394,9 +395,9 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
                     key={person.PersonID}
                     className={`p-3 rounded-xl border bg-white ${
                       erLeder
-                        ? "border-sky-400"
+                        ? "border-amber-400"
                         : erNestleder
-                          ? "border-amber-400"
+                          ? "border-sky-400"
                           : "border-slate-200"
                     }`}
                   >
@@ -415,26 +416,24 @@ export const GroupAdminModal: React.FC<GroupAdminModalProps> = ({
                               {person.Telefon || "Ingen telefon"}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            title="Fjern medlem"
+                          <IkonHandling
+                            label="Fjern medlem"
+                            Icon={Trash2}
+                            variant="decline"
                             onClick={() => fjernPerson(person.PersonID)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          />
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5 mt-2">
                           {erLeder && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
-                              <Star className="w-3 h-3 text-sky-500 fill-sky-500" />
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                              <Star className="w-3 h-3 text-amber-500 fill-amber-400" />
                               Gruppeleder
                             </span>
                           )}
                           {erNestleder && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
-                              <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-800 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                              <Star className="w-3 h-3 text-sky-500 fill-sky-500" />
                               Nestleder
                             </span>
                           )}
